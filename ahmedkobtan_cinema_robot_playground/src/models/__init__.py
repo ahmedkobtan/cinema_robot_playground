@@ -6,6 +6,10 @@ from ahmedkobtan_cinema_robot_playground.src.models.detection_models import (
     GroundingDINOModel,
     MockDetectionModel,
 )
+from ahmedkobtan_cinema_robot_playground.src.models.follow_anything_model import (
+    FollowAnythingFallback,
+    FollowAnythingModel,
+)
 from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
     BotSORTTracker,
     MockTracker,
@@ -19,6 +23,8 @@ __all__ = [
     "DetectionModel",
     "GroundingDINOModel",
     "MockDetectionModel",
+    "FollowAnythingModel",
+    "FollowAnythingFallback",
     "Tracker",
     "TrackingState",
     "BotSORTTracker",

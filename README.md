@@ -164,22 +164,105 @@ This will verify:
 - Shot planner
 - Director and Cinematographer agents
 
+### Benchmark Models (Phase 1)
+
+Benchmark models on RTX 2080 Ti:
+
+```bash
+# Benchmark all models
+poetry run python scripts/benchmark_models.py
+
+# Custom benchmark (100 frames, 720p)
+poetry run python scripts/benchmark_models.py --num-frames 100 --frame-size 720x1280
+```
+
+This will:
+- Benchmark Follow Anything (FAn) model
+- Benchmark Grounding DINO
+- Benchmark Bot-SORT tracker
+- Measure FPS, latency, and VRAM usage
+- Save results to `benchmark_results.json`
+
+### Test Video Stream (Phase 1)
+
+Test video streaming from phone to PC:
+
+```bash
+# Test IP Webcam stream (replace with your phone's IP)
+poetry run python scripts/test_video_stream.py \
+    --stream-url "http://192.168.1.100:8080/video"
+
+# Test with display window (shows video feed)
+poetry run python scripts/test_video_stream.py \
+    --stream-url "http://192.168.1.100:8080/video" \
+    --test-display
+
+# Test local camera (USB webcam)
+poetry run python scripts/test_video_stream.py \
+    --test-local \
+    --test-display
+```
+
+This will:
+- Connect to IP Webcam stream
+- Measure FPS and latency
+- Display video feed (with --test-display)
+- Test frame reading performance
+- Provide troubleshooting tips if connection fails
+
+**Finding your phone's IP address:**
+1. Open IP Webcam app on your phone
+2. Tap "Start server"
+3. Note the IP address shown (e.g., `192.168.1.100:8080`)
+4. Use URL format: `http://192.168.1.100:8080/video`
+
+### Test LLM Agent (Phase 1)
+
+Test LangChain + Ollama setup:
+
+```bash
+# Test LLM agent setup
+poetry run python scripts/test_llm_agent.py
+```
+
+This will:
+- Test simple command parsing (no LLM)
+- Test LLM-based command parsing (requires Ollama)
+- Verify Ollama connection
+- Provide setup instructions if Ollama is not available
+
 ## Development Status
 
-### ✅ Completed (Phase 1-3)
-- Video streaming pipeline
-- Arduino firmware and robot commander
-- PID controller
-- Visual servoing with movement hierarchy
-- Shot planner (Follow, Dolly, Orbit)
-- Three-layer agent architecture
-- Mock models for testing
+### ✅ Phase 1: Foundation (COMPLETED)
+- ✅ Video streaming pipeline (phone → PC via Wi-Fi)
+- ✅ Arduino firmware (motor/servo control, serial listener)
+- ✅ Follow Anything (FAn) model integration (with fallback)
+- ✅ Model benchmarking scripts for RTX 2080 Ti
+- ✅ LangChain + Ollama setup for Director Agent
+- ✅ LLM agent testing scripts
 
-### 🚧 In Progress (Phase 4-5)
-- Real model integration (Follow Anything, Grounding DINO, SAM 2, Bot-SORT)
+### ✅ Phase 2-3: Core Functionality (COMPLETED)
+- ✅ Detection models (Grounding DINO, Mock)
+- ✅ Tracking models (Bot-SORT, Simple, Mock)
+- ✅ PID controller (single and dual-axis)
+- ✅ Visual servoing with movement hierarchy
+- ✅ Shot planner (Follow, Dolly, Orbit)
+- ✅ Three-layer agent architecture
+- ✅ Director, Cinematographer, and Pilot agents
+
+### 🚧 Ready for PC Testing
+- Real model integration (Follow Anything, Grounding DINO, Bot-SORT)
+- LLM command parsing (requires Ollama setup)
+- Full hardware integration
+- Model benchmarking on RTX 2080 Ti
+
+### 📋 Future Enhancements (Phase 6)
+- SAM 2 segmentation integration
 - Velocity estimation and predictive control
-- Tracker loss handling with re-acquisition
-- LLM-based command parsing (LangChain ReAct)
+- Enhanced tracker loss handling
+- RL for motor smoothness (Isaac Sim)
+- Additional shot types (Reveal, Dolly Zoom, Lead)
+- Voice command integration (Whisper)
 
 ### 📋 Future (Phase 6)
 - RL for motor smoothness (Isaac Sim)
