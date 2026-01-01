@@ -6,19 +6,36 @@ authors = ["Ahmed Kobtan - ahmedkobtan <akobtan@asu.edu>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.12,<3.13"
 pandas = "==2.2.3"
 numpy = "==2.2.3"
 delta-spark = "2.3.0"
-pydantic = "^2.8.0"
+pydantic = "^2.12.5"
 openpyxl = "^3.1.5"
 pyarrow = "^22.0.0"
-matplotlib = "^3.10.7"
+matplotlib = "^3.10.8"
 ipykernel = "^7.1.0"
-joblib = "^1.5.2"
+joblib = "^1.5.3"
 pyyaml = "^6.0.3"
 opencv-python = "^4.12.0.88"
 pyserial = "3.5"
+# ML and Vision Dependencies
+torch = "^2.3.1"
+torchvision = "^0.18.1"
+transformers = "^4.57.3"
+ultralytics = "^8.3.245"
+# LangChain and Agentic AI
+langchain = "^0.3.27"
+langchain-community = "^0.3.31"
+langchain-core = "^0.3.81"
+ollama = "^0.1.9"
+# Tracking and Segmentation
+filterpy = "^1.4.5"  # For Kalman filter
+scipy = "^1.16.3"  # For scientific computing
+boxmot = "^16.0.6"  # Bot-SORT tracker
+# Utilities
+loguru = "^0.7.3"  # Better logging
+typing-extensions = "^4.15.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
