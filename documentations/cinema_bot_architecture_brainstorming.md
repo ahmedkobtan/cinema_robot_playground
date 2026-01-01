@@ -703,4 +703,3 @@ Calculate Size Error (Current box area vs. Desired area).
 Send M:L:speed, M:R:speed, and S:angle to Arduino.
 
 Next Logic Step: Would you like to start with a Python script that simply performs a "Center-on-Object" (Servo only) to test the speed of Grounding DINO on your 2080 Ti? This is the "Hello World" of AI robotics.
-

@@ -44,7 +44,7 @@ Replace your moveForward and moveBackward functions with this version to help th
 C++
 
 // Adjust these 'Trims' (0.0 to 1.0) to balance the bot
-float leftTrim = 1.0;  
+float leftTrim = 1.0;
 float rightTrim = 0.85; // Reducing right side power by 15% to stop veering
 
 void moveForward(int speed) {
@@ -56,7 +56,7 @@ void moveForward(int speed) {
 
 void moveBackward(int speed) {
   // Use higher speed for backward to overcome carpet friction
-  analogWrite(enA, 255 * leftTrim); 
+  analogWrite(enA, 255 * leftTrim);
   analogWrite(enB, 255 * rightTrim);
   digitalWrite(in1, LOW); digitalWrite(in2, HIGH);
   digitalWrite(in3, LOW); digitalWrite(in4, HIGH);

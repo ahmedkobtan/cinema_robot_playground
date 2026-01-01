@@ -255,7 +255,7 @@
 ; 8fwmx6mZat2S0AAAAASUVORK5CYII=
 ; thumbnail end
 ;
-; 
+;
 
 ; external perimeters extrusion width = 0.45mm
 ; perimeters extrusion width = 0.45mm
@@ -579694,12 +579694,12 @@ M73 Q100 S0
 ; avoid_crossing_curled_overhangs = 0
 ; avoid_crossing_perimeters = 0
 ; avoid_crossing_perimeters_max_detour = 0
-; bed_custom_model = 
-; bed_custom_texture = 
+; bed_custom_model =
+; bed_custom_texture =
 ; bed_shape = 0x0,250x0,250x210,0x210
 ; bed_temperature = 60
 ; before_layer_gcode = ;BEFORE_LAYER_CHANGE\nG92 E0.0\n;[layer_z]\n\n
-; between_objects_gcode = 
+; between_objects_gcode =
 ; binary_gcode = 0
 ; bottom_fill_pattern = monotonic
 ; bottom_solid_layers = 5
@@ -579794,7 +579794,7 @@ M73 Q100 S0
 ; gcode_flavor = marlin
 ; gcode_label_objects = octoprint
 ; gcode_resolution = 0.0125
-; gcode_substitutions = 
+; gcode_substitutions =
 ; high_current_on_filament_swap = 0
 ; host_type = prusalink
 ; infill_acceleration = 1000
@@ -579847,7 +579847,7 @@ M73 Q100 S0
 ; min_skirt_length = 4
 ; mmu_segmented_region_interlocking_depth = 0
 ; mmu_segmented_region_max_width = 0
-; notes = 
+; notes =
 ; nozzle_diameter = 0.4
 ; only_retract_when_crossing_perimeters = 0
 ; ooze_prevention = 0
@@ -579869,15 +579869,15 @@ M73 Q100 S0
 ; perimeter_generator = arachne
 ; perimeter_speed = 45
 ; perimeters = 5
-; physical_printer_settings_id = 
-; post_process = 
+; physical_printer_settings_id =
+; post_process =
 ; print_settings_id = 0.15mm QUALITY @MK3
 ; printer_model = MK3S
 ; printer_notes = Don't remove the following keywords! These keywords are used in the "compatible printer" condition of the print and filament profiles to link the particular print and filament profiles to this printer profile.\nPRINTER_VENDOR_PRUSA3D\nPRINTER_MODEL_MK3\n
 ; printer_settings_id = Original Prusa i3 MK3S & MK3S+
 ; printer_technology = FFF
 ; printer_variant = 0.4
-; printer_vendor = 
+; printer_vendor =
 ; raft_contact_distance = 0.2
 ; raft_expansion = 1.5
 ; raft_first_layer_density = 90%
@@ -579952,12 +579952,12 @@ M73 Q100 S0
 ; support_tree_tip_diameter = 0.6
 ; support_tree_top_rate = 30%
 ; temperature = 210
-; template_custom_gcode = 
+; template_custom_gcode =
 ; thick_bridges = 0
 ; thin_walls = 0
 ; thumbnails = 160x120
 ; thumbnails_format = PNG
-; toolchange_gcode = 
+; toolchange_gcode =
 ; top_fill_pattern = monotoniclines
 ; top_infill_extrusion_width = 0.4
 ; top_solid_infill_acceleration = 0

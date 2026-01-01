@@ -1,0 +1,10 @@
+[run]
+source = ahmedkobtan_cinema_robot_playground
+omit =
+    tests/*
+    setup.py
+    ahmedkobtan_cinema_robot_playground/src/queries/**
+    *.gcode
+
+[report]
+skip_empty = True

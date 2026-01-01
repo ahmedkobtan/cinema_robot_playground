@@ -145,7 +145,7 @@ Range: 2cm to 400cm (approx. 1in to 13ft).
 
 Accuracy: Around 3mm.
 
-Measuring Angle: ≈15 
+Measuring Angle: ≈15
 ∘
   cone directly in front of the sensor.
 
@@ -171,7 +171,7 @@ Very Close Objects (The Blind Spot): It cannot see anything closer than 2cm. If 
 
 Soft Objects: Stuffed animals, sponge, or thick fabric absorb sound rather than bouncing it back, making them "invisible" to this sensor.
 
-Angled Surfaces: If your robot approaches a wall at a sharp angle (like 45 
+Angled Surfaces: If your robot approaches a wall at a sharp angle (like 45
 ∘
  ), the sound wave might bounce away from the sensor (like a billiard ball) rather than back to it, causing the robot to crash.
 
@@ -206,7 +206,7 @@ Technical Specifications:
 
 Voltage: 4.8V to 6V (Perfect for the Arduino's 5V rail).
 
-Movement: ≈180 
+Movement: ≈180
 ∘
   rotation.
 
