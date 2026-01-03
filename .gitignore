@@ -212,3 +212,9 @@ poetry.lock
 *.DS_Store
 
 .vscode
+
+# pytorch models
+*.pt
+
+# test images
+*.png

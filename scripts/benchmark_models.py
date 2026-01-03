@@ -18,7 +18,6 @@ from ahmedkobtan_cinema_robot_playground.src.models.detection_models import (
     GroundingDINOModel,
 )
 from ahmedkobtan_cinema_robot_playground.src.models.follow_anything_model import (
-    FollowAnythingFallback,
     FollowAnythingModel,
 )
 from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
@@ -29,17 +28,20 @@ from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
 class ModelBenchmark:
     """Benchmark models for performance on RTX 2080 Ti."""
 
-    def __init__(self, num_frames: int = 100, frame_size: tuple = (720, 1280)):
+    def __init__(
+        self, num_frames: int = 100, frame_size: tuple = (720, 1280), device: str = None
+    ):
         """
         Initialize benchmark.
 
         Args:
             num_frames: Number of frames to process
             frame_size: Frame size (height, width)
+            device: Device to use ('cuda', 'cpu', or None for auto-detect)
         """
         self.num_frames = num_frames
         self.frame_size = frame_size
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     def generate_test_frame(self) -> np.ndarray:
         """Generate a test frame."""
@@ -49,17 +51,35 @@ class ModelBenchmark:
         return frame
 
     def benchmark_follow_anything(self) -> dict:
-        """Benchmark Follow Anything model."""
+        """Benchmark Follow Anything model (with SAM 2 if available, else fallback)."""
         logger.info("Benchmarking Follow Anything (FAn)...")
 
         try:
-            model = FollowAnythingModel(device=self.device)
-            if not model.is_available():
-                logger.warning("Follow Anything not available, trying fallback...")
-                model = FollowAnythingFallback(device=self.device)
-                if not model.is_available():
-                    logger.error("Follow Anything and fallback not available")
-                    return {"available": False, "error": "Model not available"}
+            # Set SAM2_CHECKPOINT if checkpoint exists in resources
+            import os
+
+            if not os.getenv("SAM2_CHECKPOINT"):
+                resources_dir = (
+                    project_root / "ahmedkobtan_cinema_robot_playground" / "resources"
+                )
+                default_checkpoints = [
+                    resources_dir / "sam2.1_hiera_base_plus.pt",
+                    resources_dir / "sam2.1_hiera_large.pt",
+                    resources_dir / "sam2.1_hiera_small.pt",
+                    resources_dir / "sam2.1_hiera_tiny.pt",
+                ]
+
+                for checkpoint_path in default_checkpoints:
+                    if checkpoint_path.exists():
+                        os.environ["SAM2_CHECKPOINT"] = str(checkpoint_path)
+                        logger.info(f"Using SAM 2 checkpoint: {checkpoint_path.name}")
+                        break
+
+            # Try to use SAM 2 if checkpoint is available, otherwise use fallback
+            model = FollowAnythingModel(use_sam2=True, device=self.device)
+            if not model.is_available() and model.fallback is None:
+                logger.error("Follow Anything not available")
+                return {"available": False, "error": "Model not available"}
 
             # Warmup
             test_frame = self.generate_test_frame()
@@ -119,12 +139,17 @@ class ModelBenchmark:
 
         try:
             model = GroundingDINOModel(device=self.device)
+
+            # Try to load model by attempting detection
+            test_frame = self.generate_test_frame()
+            _test_boxes = model.detect(test_frame, "test object")
+
+            # Check if model loaded successfully
             if not model.is_available():
-                logger.warning("Grounding DINO not available")
+                logger.warning("Grounding DINO not available after loading attempt")
                 return {"available": False, "error": "Model not available"}
 
             # Warmup
-            test_frame = self.generate_test_frame()
             _ = model.detect(test_frame, "test object")
             time.sleep(1)
 
@@ -288,6 +313,12 @@ def main():
         default="720x1280",
         help="Frame size as HxW (default: 720x1280)",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device to use ('cuda' or 'cpu', default: auto-detect)",
+    )
 
     args = parser.parse_args()
 
@@ -295,7 +326,9 @@ def main():
     h, w = map(int, args.frame_size.split("x"))
     frame_size = (h, w)
 
-    benchmark = ModelBenchmark(num_frames=args.num_frames, frame_size=frame_size)
+    benchmark = ModelBenchmark(
+        num_frames=args.num_frames, frame_size=frame_size, device=args.device
+    )
     results = benchmark.run_all_benchmarks()
 
     # Save results to file

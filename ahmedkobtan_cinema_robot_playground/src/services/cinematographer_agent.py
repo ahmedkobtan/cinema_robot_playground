@@ -24,6 +24,7 @@ class CinematographerAgent:
         tracker: Optional[Tracker] = None,
         frame_width: int = 1280,
         frame_height: int = 720,
+        device: Optional[str] = None,
     ):
         """
         Initialize Cinematographer Agent.
@@ -32,7 +33,9 @@ class CinematographerAgent:
             tracker: Tracker to use (None for auto-select)
             frame_width: Frame width in pixels
             frame_height: Frame height in pixels
+            device: Device to use ('cuda', 'cpu', or None for auto-detect)
         """
+        self.device = device
         self.tracker = tracker or self._create_tracker()
         self.shot_planner = ShotPlanner(frame_width, frame_height)
         self.frame_width = frame_width
@@ -50,7 +53,7 @@ class CinematographerAgent:
                 BotSORTTracker,
             )
 
-            tracker = BotSORTTracker()
+            tracker = BotSORTTracker(device=self.device)
             if tracker.is_available():
                 logger.info("Using Bot-SORT tracker")
                 return tracker

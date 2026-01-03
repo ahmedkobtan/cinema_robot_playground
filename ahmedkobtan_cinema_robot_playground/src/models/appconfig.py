@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class Resolved(BaseModel):
     env: str
+    ip_webcam_url: str
 
 
 class ConfigResolution(BaseModel):

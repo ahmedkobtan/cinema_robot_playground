@@ -91,14 +91,31 @@ class BotSORTTracker(Tracker):
     def _initialize_tracker(self) -> bool:
         """Initialize Bot-SORT tracker."""
         try:
-            import torch
-            from boxmot import BoTSORT
+            import torch  # noqa: F401 - used by BotSort
+            from boxmot import BotSort  # Note: BotSort, not BoTSORT
 
             logger.info("Initializing Bot-SORT tracker")
-            device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
-            self.tracker = BoTSORT(
-                model_weights="yolov8n.pt",  # Lightweight detector
-                device=device,
+            import torch as torch_module
+
+            device_obj = torch_module.device(
+                self.device or ("cuda" if torch_module.cuda.is_available() else "cpu")
+            )
+            from pathlib import Path
+
+            # Bot-SORT requires reid_weights as first positional arg
+            # Check resources directory first, then current directory
+
+            resources_dir = Path(__file__).parent.parent.parent / "resources"
+            reid_weights_path = resources_dir / "osnet_x0_25_msmt17.pt"
+
+            if not reid_weights_path.exists():
+                # Fallback to current directory (boxmot will auto-download if needed)
+                reid_weights_path = Path("osnet_x0_25_msmt17.pt")
+
+            self.tracker = BotSort(
+                reid_weights=reid_weights_path,
+                device=device_obj,
+                half=False,  # Use full precision (half=True for FP16 on GPU)
             )
             self._initialized = True
             logger.info("Bot-SORT tracker initialized")
@@ -157,7 +174,10 @@ class BotSORTTracker(Tracker):
 
     def is_available(self) -> bool:
         """Check if tracker is available."""
-        return self._initialized and self.tracker is not None
+        if not self._initialized:
+            # Try to initialize if not already done
+            return self._initialize_tracker()
+        return True and self.tracker is not None
 
 
 class SimpleTracker(Tracker):

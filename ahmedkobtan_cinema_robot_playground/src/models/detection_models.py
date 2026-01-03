@@ -12,7 +12,13 @@ class BoundingBox:
     """Bounding box representation."""
 
     def __init__(
-        self, x: float, y: float, width: float, height: float, confidence: float = 1.0
+        self,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        confidence: float = 1.0,
+        class_name: Optional[str] = None,
     ):
         """
         Initialize bounding box.
@@ -23,12 +29,14 @@ class BoundingBox:
             width: Box width
             height: Box height
             confidence: Detection confidence (0-1)
+            class_name: Optional class name/label for the detected object
         """
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.confidence = confidence
+        self.class_name = class_name
 
     @property
     def center(self) -> Tuple[float, float]:
@@ -42,13 +50,16 @@ class BoundingBox:
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
-        return {
+        result = {
             "x": self.x,
             "y": self.y,
             "width": self.width,
             "height": self.height,
             "confidence": self.confidence,
         }
+        if self.class_name is not None:
+            result["class_name"] = self.class_name
+        return result
 
 
 class DetectionModel(ABC):

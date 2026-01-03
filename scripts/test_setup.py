@@ -88,11 +88,13 @@ def test_shot_planner():
         return False
 
 
-def test_director_agent():
+def test_director_agent(device: str = "cpu"):
     """Test Director Agent."""
     print("\nTesting Director Agent...")
     try:
-        agent = DirectorAgent(detection_model=MockDetectionModel(), use_llm=False)
+        agent = DirectorAgent(
+            detection_model=MockDetectionModel(), use_llm=False, device=device
+        )
         result = agent.parse_command("Orbit the red cup")
         assert "object" in result
         assert "shot_type" in result
@@ -103,11 +105,11 @@ def test_director_agent():
         return False
 
 
-def test_cinematographer_agent():
+def test_cinematographer_agent(device: str = "cpu"):
     """Test Cinematographer Agent."""
     print("\nTesting Cinematographer Agent...")
     try:
-        agent = CinematographerAgent(tracker=MockTracker())
+        agent = CinematographerAgent(tracker=MockTracker(), device=device)
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         initial_bbox = (100.0, 100.0, 200.0, 200.0)
         success = agent.initialize_tracking(frame, initial_bbox)
@@ -121,8 +123,20 @@ def test_cinematographer_agent():
 
 def main():
     """Run all tests."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Cinema Bot setup")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device to use ('cpu' or 'cuda')",
+    )
+    args = parser.parse_args()
+
     print("=" * 50)
     print("Cinema Bot Setup Test")
+    print(f"Device: {args.device}")
     print("=" * 50)
 
     tests = [
@@ -130,8 +144,8 @@ def main():
         test_pid_controller,
         test_visual_servoing,
         test_shot_planner,
-        test_director_agent,
-        test_cinematographer_agent,
+        lambda: test_director_agent(device=args.device),
+        lambda: test_cinematographer_agent(device=args.device),
     ]
 
     results = []

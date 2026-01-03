@@ -13,7 +13,9 @@ sys.path.insert(0, str(project_root))
 import cv2
 from loguru import logger
 
+from ahmedkobtan_cinema_robot_playground.src.models.appconfig import AppConfig
 from ahmedkobtan_cinema_robot_playground.src.services.video_stream import VideoStream
+from ahmedkobtan_cinema_robot_playground.src.utils.config_utils import parse_config
 
 
 def test_local_camera():
@@ -225,7 +227,8 @@ def main():
         "--stream-url",
         type=str,
         default=None,
-        help="IP Webcam URL (e.g., http://192.168.1.100:8080/video)",
+        help="IP Webcam URL (default: from config file). "
+        "Note: Some IP Webcam apps may require /video suffix.",
     )
     parser.add_argument(
         "--camera-index",
@@ -245,6 +248,26 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Get default URL from config if not provided and IP Webcam test is requested
+    if args.stream_url is None and (args.test_display or not args.test_local):
+        try:
+            # Load config inline (no helper function)
+            import os
+            from pathlib import Path
+
+            env = os.getenv("ENV", "dev").lower()
+            project_root = Path(__file__).parent.parent
+            config_file = project_root / "config" / f"{env}.json"
+            if not config_file.exists():
+                config_file = project_root / "config" / "dev.json"
+            config_data = parse_config(str(config_file))
+            app_config = AppConfig(**config_data)
+            args.stream_url = app_config.configResolution.resolved.ip_webcam_url
+            logger.info(f"Using IP webcam URL from config: {args.stream_url}")
+        except Exception as e:
+            logger.warning(f"Failed to load config: {e}")
+            logger.info("Please provide --stream-url explicitly for IP Webcam tests")
 
     results = []
 

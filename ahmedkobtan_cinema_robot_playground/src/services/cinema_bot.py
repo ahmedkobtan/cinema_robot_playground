@@ -6,6 +6,7 @@ from typing import Optional
 
 from loguru import logger
 
+from ahmedkobtan_cinema_robot_playground.src.models.appconfig import AppConfig
 from ahmedkobtan_cinema_robot_playground.src.services.cinematographer_agent import (
     CinematographerAgent,
 )
@@ -14,6 +15,7 @@ from ahmedkobtan_cinema_robot_playground.src.services.director_agent import (
 )
 from ahmedkobtan_cinema_robot_playground.src.services.pilot_agent import PilotAgent
 from ahmedkobtan_cinema_robot_playground.src.services.video_stream import VideoStream
+from ahmedkobtan_cinema_robot_playground.src.utils.config_utils import parse_config
 from ahmedkobtan_cinema_robot_playground.src.utils.robot_commander import RobotCommander
 
 
@@ -26,6 +28,7 @@ class CinemaBot:
         serial_port: str = "/dev/ttyACM0",
         use_llm: bool = False,
         mock: bool = False,
+        device: Optional[str] = None,
     ):
         """
         Initialize Cinema Bot.
@@ -35,7 +38,11 @@ class CinemaBot:
             serial_port: Serial port for Arduino
             use_llm: Whether to use LLM for command parsing
             mock: Whether to use mock models (for testing without GPU)
+            device: Device to run on ('cuda', 'cpu', or None for auto)
         """
+        import torch
+
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.stream_url = stream_url
         self.serial_port = serial_port
         self.use_llm = use_llm
@@ -75,7 +82,9 @@ class CinemaBot:
                 )
 
             # Agents
-            self.director_agent = DirectorAgent(use_llm=self.use_llm)
+            self.director_agent = DirectorAgent(
+                use_llm=self.use_llm, device=self.device
+            )
             self.cinematographer_agent = CinematographerAgent(
                 frame_width=frame_width,
                 frame_height=frame_height,
@@ -229,7 +238,7 @@ def main():
         "--stream-url",
         type=str,
         default=None,
-        help="Video stream URL (e.g., http://192.168.1.100:8080/video)",
+        help="Video stream URL (default: from config file, None for local camera)",
     )
     parser.add_argument(
         "--serial-port",
@@ -246,7 +255,13 @@ def main():
     parser.add_argument(
         "--use-llm",
         action="store_true",
-        help="Use LLM for command parsing (requires Ollama)",
+        help="Use LLM for command parsing (uses Transformers)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device to use ('cuda' or 'cpu', default: auto-detect)",
     )
     parser.add_argument(
         "--mock",
@@ -256,11 +271,33 @@ def main():
 
     args = parser.parse_args()
 
+    # Get default URL from config if not provided
+    stream_url = args.stream_url
+    if stream_url is None:
+        try:
+            # Load config inline (no helper function)
+            import os
+            from pathlib import Path
+
+            env = os.getenv("ENV", "dev").lower()
+            project_root = Path(__file__).parent.parent.parent.parent
+            config_file = project_root / "config" / f"{env}.json"
+            if not config_file.exists():
+                config_file = project_root / "config" / "dev.json"
+            config_data = parse_config(str(config_file))
+            app_config = AppConfig(**config_data)
+            stream_url = app_config.configResolution.resolved.ip_webcam_url
+            logger.info(f"Using IP webcam URL from config: {stream_url}")
+        except Exception as e:
+            logger.warning(f"Failed to load config: {e}")
+            logger.info("Using local camera (stream_url=None)")
+
     bot = CinemaBot(
-        stream_url=args.stream_url,
+        stream_url=stream_url,
         serial_port=args.serial_port,
         use_llm=args.use_llm,
         mock=args.mock,
+        device=args.device,
     )
 
     bot.run(command=args.command)

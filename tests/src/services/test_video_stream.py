@@ -1,5 +1,9 @@
 """Tests for video streaming service."""
 
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+
 from ahmedkobtan_cinema_robot_playground.src.services.video_stream import VideoStream
 
 
@@ -14,6 +18,8 @@ class TestVideoStream:
         assert stream.width == 1280
         assert stream.height == 720
         assert stream.fps == 30
+        # Cleanup
+        stream.disconnect()
 
     def test_initialization_with_camera(self):
         """Test initialization with camera index."""
@@ -23,6 +29,8 @@ class TestVideoStream:
         assert stream.width == 640
         assert stream.height == 480
         assert stream.fps == 15
+        # Cleanup
+        stream.disconnect()
 
     def test_get_frame_size_default(self):
         """Test getting default frame size."""
@@ -30,17 +38,24 @@ class TestVideoStream:
         width, height = stream.get_frame_size()
         assert width == 1280
         assert height == 720
+        # Cleanup
+        stream.disconnect()
 
-    def test_context_manager(self):
+    @patch("cv2.VideoCapture")
+    def test_context_manager(self, mock_video_capture):
         """Test context manager usage."""
+        # Mock successful connection
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((720, 1280, 3), dtype=np.uint8))
+        mock_video_capture.return_value = mock_cap
+
         stream = VideoStream()
-        # Should not crash even if connection fails
-        try:
-            with stream:
-                assert stream.is_streaming or not stream.is_streaming  # Either is fine
-        except Exception:
-            # Expected if no camera/stream available
-            pass
+        # Should not crash
+        with stream:
+            assert stream.is_streaming or not stream.is_streaming  # Either is fine
+        # Cleanup
+        stream.disconnect()
 
     def test_disconnect_when_not_connected(self):
         """Test disconnect when not connected."""

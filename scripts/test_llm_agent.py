@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Test LangChain + Ollama setup for Director Agent."""
+"""Test Transformers-based LLM setup for Director Agent.
+
+NOTE: This script is kept for backward compatibility but now uses Transformers.
+For comprehensive testing, use scripts/test_llm_transformers.py instead.
+"""
 
 import sys
 from pathlib import Path
@@ -16,15 +20,16 @@ from ahmedkobtan_cinema_robot_playground.src.services.director_agent import (
 )
 
 
-def test_llm_agent():
+def test_llm_agent(device: str = "cpu"):
     """Test LLM agent setup and command parsing."""
     logger.info("=" * 60)
-    logger.info("Testing LangChain + Ollama Setup")
+    logger.info("Testing Transformers-based LLM Setup")
+    logger.info(f"Device: {device}")
     logger.info("=" * 60)
 
     # Test without LLM (simple parsing)
     logger.info("\n1. Testing simple command parsing (no LLM)...")
-    agent_simple = DirectorAgent(use_llm=False)
+    agent_simple = DirectorAgent(use_llm=False, device=device)
     test_commands = [
         "Orbit the red cup",
         "Follow the cat",
@@ -37,10 +42,11 @@ def test_llm_agent():
         logger.info(f"  Command: '{cmd}'")
         logger.info(f"  Parsed: {result}")
 
-    # Test with LLM (if available)
-    logger.info("\n2. Testing LLM-based command parsing...")
+    # Test with LLM (Transformers - if available)
+    logger.info("\n2. Testing Transformers-based LLM command parsing...")
     try:
-        agent_llm = DirectorAgent(use_llm=True)
+        logger.info("  Loading LLM model (this may take a few minutes)...")
+        agent_llm = DirectorAgent(use_llm=True, device=device)
         if agent_llm.llm_agent is not None:
             logger.info("  ✓ LLM agent initialized successfully")
 
@@ -49,41 +55,38 @@ def test_llm_agent():
                 logger.info(f"  Command: '{cmd}'")
                 logger.info(f"  Parsed: {result}")
         else:
-            logger.warning("  ✗ LLM agent not available (Ollama may not be running)")
-            logger.info("  To use LLM parsing:")
-            logger.info("    1. Install Ollama: https://ollama.ai")
-            logger.info("    2. Pull model: ollama pull llama3.1:8b")
-            logger.info("    3. Start Ollama service")
+            logger.warning("  ✗ LLM agent not available")
+            logger.info(
+                "  This is expected if model download fails or CUDA unavailable"
+            )
+            logger.info("  System will fall back to simple parsing")
 
     except Exception as e:
         logger.error(f"  ✗ Error setting up LLM agent: {e}")
-        logger.info("  Falling back to simple parsing")
+        logger.info("  Falling back to simple parsing (this is acceptable)")
 
     logger.info("\n" + "=" * 60)
     logger.info("LLM Agent Test Complete")
     logger.info("=" * 60)
 
 
-def test_ollama_connection():
-    """Test direct Ollama connection."""
-    logger.info("\n3. Testing direct Ollama connection...")
-    try:
-        from langchain_community.llms import Ollama
-
-        llm = Ollama(model="llama3.1:8b")
-        response = llm.invoke("Say 'Hello' if you can hear me.")
-        logger.info(f"  ✓ Ollama connected: {response[:50]}...")
-        return True
-    except Exception as e:
-        logger.warning(f"  ✗ Ollama not available: {e}")
-        logger.info("  Install and start Ollama to enable LLM parsing")
-        return False
-
-
 def main():
     """Run LLM agent tests."""
-    test_llm_agent()
-    test_ollama_connection()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test LLM agent for Director")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device to use ('cpu' or 'cuda')",
+    )
+    args = parser.parse_args()
+
+    test_llm_agent(device=args.device)
+    logger.info(
+        "\nNOTE: For comprehensive LLM testing, run: poetry run python scripts/test_llm_transformers.py"
+    )
     return 0
 
 
