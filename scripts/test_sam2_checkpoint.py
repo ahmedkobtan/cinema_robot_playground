@@ -271,7 +271,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Test SAM 2 checkpoint")
     parser.add_argument(
-        "checkpoint_path",
+        "--checkpoint_path",
         type=str,
         help="Path to SAM 2 checkpoint file",
     )
