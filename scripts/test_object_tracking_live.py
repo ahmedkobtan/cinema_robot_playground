@@ -128,13 +128,11 @@ class ObjectTracker:
                     if boxes and len(boxes) > 0:
                         bbox = boxes[0]
                         h, w = frame.shape[:2]
-                        # Reject full-frame bounding boxes (likely false positives)
-                        is_full_frame = (
-                            bbox.x <= 5
-                            and bbox.y <= 5
-                            and bbox.width >= w - 10
-                            and bbox.height >= h - 10
-                        )
+                        # Reject full-frame bounding boxes using area coverage (more robust)
+                        bbox_area = bbox.width * bbox.height
+                        image_area = w * h
+                        area_coverage = bbox_area / image_area if image_area > 0 else 0
+                        is_full_frame = area_coverage >= 0.95  # Cover >95% of image
                         # Only use if confidence is reasonable and not full frame
                         # Lower threshold to 0.25 to match FAn's internal threshold
                         if bbox.confidence > 0.25 and not is_full_frame:
@@ -169,13 +167,13 @@ class ObjectTracker:
                         boxes = sorted(boxes, key=lambda b: b.confidence, reverse=True)
                         for bbox in boxes:
                             h, w = frame.shape[:2]
-                            # Reject full-frame bounding boxes
-                            is_full_frame = (
-                                bbox.x <= 5
-                                and bbox.y <= 5
-                                and bbox.width >= w - 10
-                                and bbox.height >= h - 10
+                            # Reject full-frame bounding boxes using area coverage
+                            bbox_area = bbox.width * bbox.height
+                            image_area = w * h
+                            area_coverage = (
+                                bbox_area / image_area if image_area > 0 else 0
                             )
+                            is_full_frame = area_coverage >= 0.95
                             # Use reasonable confidence threshold (Grounding DINO uses 0.3 internally)
                             if bbox.confidence > 0.25 and not is_full_frame:
                                 initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
@@ -211,13 +209,13 @@ class ObjectTracker:
                         boxes = sorted(boxes, key=lambda b: b.confidence, reverse=True)
                         for bbox in boxes:
                             h, w = frame.shape[:2]
-                            # Reject full-frame bounding boxes
-                            is_full_frame = (
-                                bbox.x <= 5
-                                and bbox.y <= 5
-                                and bbox.width >= w - 10
-                                and bbox.height >= h - 10
+                            # Reject full-frame bounding boxes using area coverage
+                            bbox_area = bbox.width * bbox.height
+                            image_area = w * h
+                            area_coverage = (
+                                bbox_area / image_area if image_area > 0 else 0
                             )
+                            is_full_frame = area_coverage >= 0.95
                             # Use reasonable confidence threshold (Grounding DINO uses 0.3 internally)
                             if bbox.confidence > 0.25 and not is_full_frame:
                                 if self.tracker.is_available():

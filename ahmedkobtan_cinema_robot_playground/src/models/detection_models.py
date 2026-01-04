@@ -163,21 +163,31 @@ class GroundingDINOModel(DetectionModel):
             )[0]
 
             boxes = []
+            h, w = image.shape[:2]
+            image_area = h * w
+
             for box, score, label in zip(
                 results["boxes"],
                 results["scores"],
                 results["labels"],
             ):
                 x, y, x2, y2 = box.cpu().numpy()
-                boxes.append(
-                    BoundingBox(
-                        x=float(x),
-                        y=float(y),
-                        width=float(x2 - x),
-                        height=float(y2 - y),
-                        confidence=float(score),
+                bbox_width = float(x2 - x)
+                bbox_height = float(y2 - y)
+                bbox_area = bbox_width * bbox_height
+                area_coverage = bbox_area / image_area if image_area > 0 else 0
+
+                # Reject full-frame detections (cover >95% of image)
+                if area_coverage < 0.95:
+                    boxes.append(
+                        BoundingBox(
+                            x=float(x),
+                            y=float(y),
+                            width=bbox_width,
+                            height=bbox_height,
+                            confidence=float(score),
+                        )
                     )
-                )
 
             return boxes
 

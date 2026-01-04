@@ -170,10 +170,16 @@ class BotSORTTracker(Tracker):
             if initial_bbox is not None:
                 # Initialize or refresh with new detection
                 x, y, w, h = initial_bbox
-                detections = np.array(
-                    [[x, y, x + w, y + h, 0.9, 0]]
-                )  # [x1, y1, x2, y2, conf, class]
-                tracks = self.tracker.update(detections, frame)
+                # Ensure valid bbox (width and height > 0)
+                if w > 0 and h > 0:
+                    # Use higher confidence for initial detection to ensure track is established
+                    detections = np.array(
+                        [[x, y, x + w, y + h, 0.95, 0]]
+                    )  # [x1, y1, x2, y2, conf, class]
+                    tracks = self.tracker.update(detections, frame)
+                else:
+                    # Invalid bbox, try to continue tracking
+                    tracks = self.tracker.update(np.array([]), frame)
             else:
                 # Continue tracking without new detection
                 # Bot-SORT will use Kalman filter prediction and track buffer

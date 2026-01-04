@@ -78,8 +78,10 @@ class FollowAnythingModel(DetectionModel, Tracker):
         self._loaded = False
         self._tracking_initialized = False
         self._current_track_id = 0
-        self._stored_features = []  # For re-detection
+        self._stored_features = []  # For re-detection: stored DINO features of tracked object
+        self._stored_query_features = None  # Store query features (text prompt)
         self._current_image = None  # For SAM/SAM2
+        self._last_tracked_bbox = None  # Last successfully tracked bounding box
 
         # Fallback if components not available
         self.fallback = None
@@ -336,24 +338,24 @@ class FollowAnythingModel(DetectionModel, Tracker):
             h, w = image_rgb.shape[:2]
 
             # Generate masks using grid of points for comprehensive coverage
-            # Use a denser grid for better mask generation
+            # Use a denser grid but avoid edge points to reduce full-frame masks
             grid_points = []
-            grid_size = 4  # 4x4 grid
+            grid_size = 5  # 5x5 grid for better coverage
+            # Skip edges (i=0, i=grid_size, j=0, j=grid_size) to avoid full-frame masks
             for i in range(1, grid_size):
                 for j in range(1, grid_size):
                     x = int(w * j / grid_size)
                     y = int(h * i / grid_size)
                     grid_points.append([x, y])
 
-            # Also add center points of each quadrant
+            # Add strategic points (avoid very center which might generate full-frame)
             points = np.array(
                 grid_points
                 + [
-                    [w // 4, h // 4],
-                    [3 * w // 4, h // 4],
-                    [w // 4, 3 * h // 4],
-                    [3 * w // 4, 3 * h // 4],
-                    [w // 2, h // 2],
+                    [w // 3, h // 3],  # Upper-left region
+                    [2 * w // 3, h // 3],  # Upper-right region
+                    [w // 3, 2 * h // 3],  # Lower-left region
+                    [2 * w // 3, 2 * h // 3],  # Lower-right region
                 ],
                 dtype=np.float32,
             )
@@ -366,13 +368,22 @@ class FollowAnythingModel(DetectionModel, Tracker):
                 multimask_output=True,
             )
 
-            # Return top masks (sorted by score)
+            # Filter and return top masks (sorted by score, excluding full-frame masks)
             if len(scores) > 0:
-                # Get unique masks (avoid duplicates)
                 unique_masks = []
                 seen_masks = set()
+                image_area = h * w
+
                 for idx in np.argsort(scores)[::-1]:  # Sort descending
                     mask = masks[idx]
+                    # Check if mask is full-frame (cover >95% of image)
+                    mask_area = np.sum(mask)
+                    coverage = mask_area / image_area if image_area > 0 else 0
+
+                    # Skip full-frame masks
+                    if coverage >= 0.95:
+                        continue
+
                     # Simple hash to avoid exact duplicates
                     mask_hash = hash(mask.tobytes()[:1000])  # First 1000 bytes
                     if mask_hash not in seen_masks:
@@ -380,6 +391,19 @@ class FollowAnythingModel(DetectionModel, Tracker):
                         seen_masks.add(mask_hash)
                         if len(unique_masks) >= 5:  # Top 5 unique masks
                             break
+
+                # If no good masks found, return top 3 anyway (might be needed for some objects)
+                if not unique_masks and len(masks) > 0:
+                    for idx in np.argsort(scores)[::-1][:3]:
+                        mask = masks[idx]
+                        mask_area = np.sum(mask)
+                        coverage = mask_area / image_area if image_area > 0 else 0
+                        # Only include if not too large (allow up to 98% for edge cases)
+                        if coverage < 0.98:
+                            unique_masks.append(mask)
+                            if len(unique_masks) >= 3:
+                                break
+
                 return unique_masks
             return []
         except Exception as e:
@@ -458,15 +482,57 @@ class FollowAnythingModel(DetectionModel, Tracker):
                 return []
 
             # 3. Compute features for each mask and find best match
+            # According to original FAn: use DINO for masked regions, CLIP only for text encoding
             best_mask = None
             best_score = -1.0
+            best_mask_features = None  # Store features of best mask for re-detection
 
             for mask in masks:
-                # Extract features from masked region
+                # Extract features from masked region using DINO (as per original FAn)
                 masked_image = image_rgb * mask[:, :, np.newaxis]
 
-                if self.clip_model is not None:
-                    # Use Open-CLIP to encode masked image
+                # Use DINO for masked region features (original FAn methodology)
+                if self.dino_model is not None:
+                    try:
+                        # Preprocess for DINOv2
+                        pil_image = transforms.ToPILImage()(
+                            masked_image.astype(np.uint8)
+                        )
+                        inputs = self.dino_processor(
+                            images=pil_image, return_tensors="pt"
+                        ).to(self.device)
+
+                        with torch.no_grad():
+                            outputs = self.dino_model(**inputs)
+                            # Get CLS token or average pooled features
+                            if hasattr(outputs, "last_hidden_state"):
+                                # Average pool over spatial dimensions
+                                mask_features = outputs.last_hidden_state.mean(dim=1)
+                            elif hasattr(outputs, "pooler_output"):
+                                mask_features = outputs.pooler_output
+                            else:
+                                # Fallback: use first element
+                                mask_features = list(outputs.values())[0].mean(dim=1)
+
+                            # Normalize features
+                            mask_features = mask_features / mask_features.norm(
+                                dim=-1, keepdim=True
+                            )
+
+                        # Compute similarity with query features
+                        similarity = (query_features @ mask_features.T).item()
+
+                        if similarity > best_score:
+                            best_score = similarity
+                            best_mask = mask
+                            best_mask_features = (
+                                mask_features.cpu()
+                            )  # Store for re-detection
+                    except Exception as e:
+                        logger.warning(f"Error encoding image with DINOv2: {e}")
+                        continue
+                # Fallback to CLIP if DINO not available
+                elif self.clip_model is not None:
                     try:
                         # Preprocess image
                         pil_image = transforms.ToPILImage()(
@@ -488,33 +554,72 @@ class FollowAnythingModel(DetectionModel, Tracker):
                         if similarity > best_score:
                             best_score = similarity
                             best_mask = mask
+                            best_mask_features = (
+                                image_features.cpu()
+                            )  # Store for re-detection
                     except Exception as e:
                         logger.warning(f"Error encoding image with Open-CLIP: {e}")
                         continue
 
             # 4. Convert best mask to bounding box
-            # Lower threshold to 0.25 to allow more detections through
-            # The full-frame rejection in the calling code will filter out bad detections
-            if best_mask is not None and best_score > 0.25:  # Lowered from 0.3
+            # Check if we should use stored features for re-detection
+            use_stored_features = (
+                len(self._stored_features) > 0 and self._tracking_initialized
+            )
+
+            if best_mask is not None:
                 y_indices, x_indices = np.where(best_mask)
                 if len(x_indices) > 0 and len(y_indices) > 0:
                     x_min, x_max = float(x_indices.min()), float(x_indices.max())
                     y_min, y_max = float(y_indices.min()), float(y_indices.max())
+                    bbox_width = x_max - x_min
+                    bbox_height = y_max - y_min
 
-                    bbox = BoundingBox(
-                        x=x_min,
-                        y=y_min,
-                        width=x_max - x_min,
-                        height=y_max - y_min,
-                        confidence=float(best_score),
-                        class_name=text_prompt,
-                    )
-                    boxes.append(bbox)
+                    # Reject full-frame detections (cover >95% of image)
+                    bbox_area = bbox_width * bbox_height
+                    image_area = w * h
+                    area_coverage = bbox_area / image_area if image_area > 0 else 0
 
-                    # Store features for re-detection
-                    self._stored_features.append(query_features.cpu())
-            # Remove the full-image fallback - it causes too many false positives
-            # If no good mask match, return empty (let fallback handle it)
+                    # Check similarity threshold
+                    # If using stored features (re-detection), use lower threshold
+                    similarity_threshold = 0.20 if use_stored_features else 0.25
+
+                    if best_score > similarity_threshold and area_coverage < 0.95:
+                        # If re-detecting with stored features, compare to stored features
+                        if use_stored_features and best_mask_features is not None:
+                            # Compare to average of stored features
+                            avg_stored = torch.stack(self._stored_features).mean(dim=0)
+                            stored_similarity = (
+                                best_mask_features.to(self.device)
+                                @ avg_stored.to(self.device).T
+                            ).item()
+                            # Use higher of text similarity or stored feature similarity
+                            best_score = max(best_score, stored_similarity * 0.8)
+
+                        bbox = BoundingBox(
+                            x=x_min,
+                            y=y_min,
+                            width=bbox_width,
+                            height=bbox_height,
+                            confidence=float(best_score),
+                            class_name=text_prompt,
+                        )
+                        boxes.append(bbox)
+
+                        # Store tracked object features for re-detection (DINO features of mask)
+                        if best_mask_features is not None:
+                            self._stored_features.append(best_mask_features)
+                            # Keep only last 30 features to avoid memory issues
+                            if len(self._stored_features) > 30:
+                                self._stored_features = self._stored_features[-30:]
+
+                        # Store query features for initial detection
+                        if self._stored_query_features is None:
+                            self._stored_query_features = query_features.cpu()
+                    elif area_coverage >= 0.95:
+                        logger.debug(
+                            f"Rejected full-frame detection (coverage={area_coverage:.2%}, conf={best_score:.2f})"
+                        )
 
             return boxes
 
@@ -531,6 +636,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
     ) -> Optional[TrackingState]:
         """
         Update tracking with new frame using Follow Anything.
+
+        Implements automatic re-detection: stores DINO features of tracked object
+        at every frame, uses them for re-detection when tracking is lost.
 
         Args:
             frame: Current video frame
@@ -549,7 +657,72 @@ class FollowAnythingModel(DetectionModel, Tracker):
 
         # Use Bot-SORT tracker if available
         if self.tracker is not None:
-            return self.tracker.update(frame, initial_bbox)
+            state = self.tracker.update(frame, initial_bbox)
+
+            # Store tracked object features for automatic re-detection
+            if state is not None and self.dino_model is not None:
+                try:
+                    # Extract DINO features from tracked region
+                    x, y, w, h = state.bbox
+                    # Convert to int and clamp to image bounds
+                    h_img, w_img = frame.shape[:2]
+                    x1 = max(0, int(x))
+                    y1 = max(0, int(y))
+                    x2 = min(w_img, int(x + w))
+                    y2 = min(h_img, int(y + h))
+
+                    if x2 > x1 and y2 > y1:
+                        # Extract region
+                        tracked_region = frame[y1:y2, x1:x2]
+                        if tracked_region.size > 0:
+                            # Convert BGR to RGB
+                            import cv2
+
+                            tracked_region_rgb = cv2.cvtColor(
+                                tracked_region, cv2.COLOR_BGR2RGB
+                            )
+                            pil_image = transforms.ToPILImage()(
+                                tracked_region_rgb.astype(np.uint8)
+                            )
+
+                            # Extract DINO features
+                            inputs = self.dino_processor(
+                                images=pil_image, return_tensors="pt"
+                            ).to(self.device)
+
+                            with torch.no_grad():
+                                outputs = self.dino_model(**inputs)
+                                if hasattr(outputs, "last_hidden_state"):
+                                    track_features = outputs.last_hidden_state.mean(
+                                        dim=1
+                                    )
+                                elif hasattr(outputs, "pooler_output"):
+                                    track_features = outputs.pooler_output
+                                else:
+                                    track_features = list(outputs.values())[0].mean(
+                                        dim=1
+                                    )
+
+                                track_features = track_features / track_features.norm(
+                                    dim=-1, keepdim=True
+                                )
+
+                            # Store features for re-detection
+                            self._stored_features.append(track_features.cpu())
+                            # Keep only last 30 features
+                            if len(self._stored_features) > 30:
+                                self._stored_features = self._stored_features[-30:]
+
+                            self._last_tracked_bbox = state.bbox
+                            self._tracking_initialized = True
+                except Exception as e:
+                    logger.debug(f"Error storing tracked object features: {e}")
+
+            # Initialize tracking on first detection
+            if initial_bbox is not None:
+                self._tracking_initialized = True
+
+            return state
 
         # Simple tracking fallback
         try:
@@ -583,7 +756,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
         self._tracking_initialized = False
         self._current_track_id = 0
         self._stored_features = []
+        self._stored_query_features = None
         self._current_image = None
+        self._last_tracked_bbox = None
         if self.tracker is not None:
             self.tracker.reset()
         if self.fallback is not None:
