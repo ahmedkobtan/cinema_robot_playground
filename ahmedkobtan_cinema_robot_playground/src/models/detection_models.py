@@ -154,11 +154,12 @@ class GroundingDINOModel(DetectionModel):
             with torch.no_grad():
                 outputs = self.model(**inputs)
 
-            # Process results
+            # Process results with lower threshold for better detection
+            # Grounding DINO can be conservative, so we lower threshold slightly
             results = self.processor.post_process_grounded_object_detection(
                 outputs,
                 target_sizes=[(image.shape[0], image.shape[1])],
-                threshold=0.3,
+                threshold=0.25,  # Lowered from 0.3 for better detection
             )[0]
 
             boxes = []

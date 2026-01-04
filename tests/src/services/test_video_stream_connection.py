@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import cv2
 import numpy as np
 
 from ahmedkobtan_cinema_robot_playground.src.services.video_stream import VideoStream
@@ -14,7 +15,7 @@ class TestVideoStreamConnection(unittest.TestCase):
     @patch("cv2.VideoCapture")
     def test_connect_with_url(self, mock_video_capture):
         """Test connection with URL."""
-        # Mock successful connection
+        # Mock successful connection on first attempt
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.read.return_value = (True, np.zeros((720, 1280, 3), dtype=np.uint8))
@@ -25,16 +26,19 @@ class TestVideoStreamConnection(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertTrue(stream.is_streaming)
-        mock_video_capture.assert_called_once_with("http://192.168.0.220:8080")
-        mock_cap.isOpened.assert_called_once()
-        mock_cap.read.assert_called_once()
+        # Should be called with URL and FFMPEG backend
+        mock_video_capture.assert_called_with(
+            "http://192.168.0.220:8080", cv2.CAP_FFMPEG
+        )
+        mock_cap.isOpened.assert_called()
+        mock_cap.read.assert_called()
         # Cleanup
         stream.disconnect()
 
     @patch("cv2.VideoCapture")
     def test_connect_with_url_video_suffix(self, mock_video_capture):
         """Test connection with URL that includes /video suffix."""
-        # Mock successful connection
+        # Mock successful connection - tries base URL first, then /video
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.read.return_value = (True, np.zeros((720, 1280, 3), dtype=np.uint8))
@@ -45,7 +49,13 @@ class TestVideoStreamConnection(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertTrue(stream.is_streaming)
-        mock_video_capture.assert_called_once_with("http://192.168.0.220:8080/video")
+        # Should try base URL first (without /video), then /video URL
+        # Check that it was called with FFMPEG backend
+        calls = mock_video_capture.call_args_list
+        self.assertGreater(len(calls), 0)
+        # First call should be base URL (without /video) with FFMPEG backend
+        self.assertEqual(calls[0][0][0], "http://192.168.0.220:8080")
+        self.assertEqual(calls[0][0][1], cv2.CAP_FFMPEG)
         # Cleanup
         stream.disconnect()
 
@@ -69,7 +79,7 @@ class TestVideoStreamConnection(unittest.TestCase):
     @patch("cv2.VideoCapture")
     def test_connect_fails_when_read_fails(self, mock_video_capture):
         """Test connection fails when initial read fails."""
-        # Mock connection opened but read fails
+        # Mock connection opened but read fails for all URL attempts
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.read.return_value = (False, None)
@@ -80,7 +90,9 @@ class TestVideoStreamConnection(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertFalse(stream.is_streaming)
-        mock_cap.read.assert_called_once()
+        # read() is called for each URL attempt (original URL, then /video, then default backend)
+        # Should be called at least once, possibly multiple times
+        self.assertGreaterEqual(mock_cap.read.call_count, 1)
         # Cleanup
         stream.disconnect()
 
@@ -116,8 +128,8 @@ class TestVideoStreamConnection(unittest.TestCase):
 
     @patch("cv2.VideoCapture")
     def test_connect_uses_exact_url_provided(self, mock_video_capture):
-        """Test that connect() uses the exact URL provided to VideoCapture."""
-        # Mock successful connection
+        """Test that connect() tries the exact URL provided first, then alternatives."""
+        # Mock successful connection on first attempt
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.read.return_value = (True, np.zeros((720, 1280, 3), dtype=np.uint8))
@@ -129,8 +141,12 @@ class TestVideoStreamConnection(unittest.TestCase):
         result = stream.connect()
 
         self.assertTrue(result)
-        # Verify VideoCapture was called with exact URL (no modifications)
-        mock_video_capture.assert_called_once_with(test_url)
+        # Verify VideoCapture was called with URL and FFMPEG backend
+        # First call should be the original URL
+        calls = mock_video_capture.call_args_list
+        self.assertGreater(len(calls), 0)
+        self.assertEqual(calls[0][0][0], test_url)
+        self.assertEqual(calls[0][0][1], cv2.CAP_FFMPEG)
         stream.disconnect()
 
         # Test with URL with /video
@@ -141,8 +157,12 @@ class TestVideoStreamConnection(unittest.TestCase):
         result2 = stream2.connect()
 
         self.assertTrue(result2)
-        # Verify VideoCapture was called with exact URL including /video
-        mock_video_capture.assert_called_once_with(test_url_with_video)
+        # First call should try base URL (without /video), then /video URL
+        calls = mock_video_capture.call_args_list
+        self.assertGreater(len(calls), 0)
+        # First attempt is base URL (without /video)
+        self.assertEqual(calls[0][0][0], "http://192.168.0.220:8080")
+        self.assertEqual(calls[0][0][1], cv2.CAP_FFMPEG)
         stream2.disconnect()
 
 

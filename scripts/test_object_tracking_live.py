@@ -127,11 +127,23 @@ class ObjectTracker:
                     boxes = self.model.detect(frame, text_prompt)
                     if boxes and len(boxes) > 0:
                         bbox = boxes[0]
-                        # Only use if confidence is reasonable
-                        if bbox.confidence > 0.1:  # Low threshold for test images
+                        h, w = frame.shape[:2]
+                        # Reject full-frame bounding boxes (likely false positives)
+                        is_full_frame = (
+                            bbox.x <= 5
+                            and bbox.y <= 5
+                            and bbox.width >= w - 10
+                            and bbox.height >= h - 10
+                        )
+                        # Only use if confidence is reasonable and not full frame
+                        if bbox.confidence > 0.3 and not is_full_frame:
                             initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
                             state = self.model.update(frame, initial_bbox=initial_bbox)
                             return (True, bbox, state)
+                        elif is_full_frame:
+                            logger.warning(
+                                f"Rejected full-frame detection (conf={bbox.confidence:.2f})"
+                            )
                     return (False, None, None)
                 else:
                     # Continue tracking
@@ -152,14 +164,28 @@ class ObjectTracker:
                 if initial_detection:
                     boxes = self.fallback.detect(frame, text_prompt)
                     if boxes and len(boxes) > 0:
-                        bbox = boxes[0]
-                        # Only use if confidence is reasonable
-                        if bbox.confidence > 0.1:  # Low threshold for test images
-                            initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
-                            state = self.fallback.update(
-                                frame, initial_bbox=initial_bbox
+                        # Sort by confidence and try best matches
+                        boxes = sorted(boxes, key=lambda b: b.confidence, reverse=True)
+                        for bbox in boxes:
+                            h, w = frame.shape[:2]
+                            # Reject full-frame bounding boxes
+                            is_full_frame = (
+                                bbox.x <= 5
+                                and bbox.y <= 5
+                                and bbox.width >= w - 10
+                                and bbox.height >= h - 10
                             )
-                            return (True, bbox, state)
+                            # Use reasonable confidence threshold (Grounding DINO uses 0.3 internally)
+                            if bbox.confidence > 0.25 and not is_full_frame:
+                                initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
+                                state = self.fallback.update(
+                                    frame, initial_bbox=initial_bbox
+                                )
+                                return (True, bbox, state)
+                            elif is_full_frame:
+                                logger.debug(
+                                    f"Skipping full-frame detection (conf={bbox.confidence:.2f})"
+                                )
                     return (False, None, None)
                 else:
                     state = self.fallback.update(frame)
@@ -180,18 +206,37 @@ class ObjectTracker:
                     # Initial detection with Grounding DINO
                     boxes = self.model.detect(frame, text_prompt)
                     if boxes and len(boxes) > 0:
-                        bbox = boxes[0]
-                        # Only use if confidence is reasonable
-                        if bbox.confidence > 0.1:  # Low threshold for test images
-                            if self.tracker.is_available():
-                                initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
-                                state = self.tracker.update(
-                                    frame, initial_bbox=initial_bbox
+                        # Sort by confidence and try best matches
+                        boxes = sorted(boxes, key=lambda b: b.confidence, reverse=True)
+                        for bbox in boxes:
+                            h, w = frame.shape[:2]
+                            # Reject full-frame bounding boxes
+                            is_full_frame = (
+                                bbox.x <= 5
+                                and bbox.y <= 5
+                                and bbox.width >= w - 10
+                                and bbox.height >= h - 10
+                            )
+                            # Use reasonable confidence threshold (Grounding DINO uses 0.3 internally)
+                            if bbox.confidence > 0.25 and not is_full_frame:
+                                if self.tracker.is_available():
+                                    initial_bbox = (
+                                        bbox.x,
+                                        bbox.y,
+                                        bbox.width,
+                                        bbox.height,
+                                    )
+                                    state = self.tracker.update(
+                                        frame, initial_bbox=initial_bbox
+                                    )
+                                    return (True, bbox, state)
+                                else:
+                                    # Tracker not available, return detection only
+                                    return (True, bbox, None)
+                            elif is_full_frame:
+                                logger.debug(
+                                    f"Skipping full-frame detection (conf={bbox.confidence:.2f})"
                                 )
-                                return (True, bbox, state)
-                            else:
-                                # Tracker not available, return detection only
-                                return (True, bbox, None)
                     return (False, None, None)
                 else:
                     # Continue tracking
