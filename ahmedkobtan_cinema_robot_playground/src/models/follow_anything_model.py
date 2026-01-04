@@ -337,29 +337,41 @@ class FollowAnythingModel(DetectionModel, Tracker):
 
             h, w = image_rgb.shape[:2]
 
-            # Generate masks using grid of points for comprehensive coverage
-            # Use a denser grid but avoid edge points to reduce full-frame masks
-            grid_points = []
-            grid_size = 5  # 5x5 grid for better coverage
-            # Skip edges (i=0, i=grid_size, j=0, j=grid_size) to avoid full-frame masks
+            # CRITICAL FIX: Use fewer strategic points with negative constraints
+            # Too many positive points cause SAM 2 to generate full-frame masks
+            # Strategy: Use a sparse grid with negative points at corners to constrain masks
+
+            # Positive points: sparse grid (3x3) in center regions only
+            positive_points = []
+            grid_size = 3  # Smaller grid to avoid full-frame masks
+            margin = 0.15  # Margin from edges (15% of image)
             for i in range(1, grid_size):
                 for j in range(1, grid_size):
-                    x = int(w * j / grid_size)
-                    y = int(h * i / grid_size)
-                    grid_points.append([x, y])
+                    x = int(w * (margin + (1 - 2 * margin) * j / grid_size))
+                    y = int(h * (margin + (1 - 2 * margin) * i / grid_size))
+                    positive_points.append([x, y])
 
-            # Add strategic points (avoid very center which might generate full-frame)
-            points = np.array(
-                grid_points
-                + [
-                    [w // 3, h // 3],  # Upper-left region
-                    [2 * w // 3, h // 3],  # Upper-right region
-                    [w // 3, 2 * h // 3],  # Lower-left region
-                    [2 * w // 3, 2 * h // 3],  # Lower-right region
-                ],
-                dtype=np.float32,
+            # Negative points: corners and edges to constrain masks
+            # These tell SAM 2 "these areas are NOT part of the object"
+            negative_points = [
+                [w * 0.05, h * 0.05],  # Top-left corner
+                [w * 0.95, h * 0.05],  # Top-right corner
+                [w * 0.05, h * 0.95],  # Bottom-left corner
+                [w * 0.95, h * 0.95],  # Bottom-right corner
+                [w * 0.5, h * 0.05],  # Top edge
+                [w * 0.5, h * 0.95],  # Bottom edge
+                [w * 0.05, h * 0.5],  # Left edge
+                [w * 0.95, h * 0.5],  # Right edge
+            ]
+
+            # Combine points: positive first, then negative
+            all_points = positive_points + negative_points
+            points = np.array(all_points, dtype=np.float32)
+
+            # Labels: 1 for positive, 0 for negative
+            point_labels = np.array(
+                [1] * len(positive_points) + [0] * len(negative_points), dtype=np.int32
             )
-            point_labels = np.ones(len(points), dtype=np.int32)
 
             # Generate masks
             masks, scores, _ = self.sam2_predictor.predict(

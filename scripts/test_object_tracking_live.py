@@ -396,8 +396,12 @@ def test_tracking(
             # Detect or track
             # Bot-SORT requires min_hits=3 to confirm a track, so we need to provide
             # detections for the first 3 frames to establish the track
+            # Then provide a few more detections to ensure track is fully confirmed
             REDETECT_INTERVAL = 10
-            MIN_HITS_TO_ESTABLISH = 3  # Bot-SORT's min_hits parameter
+            # MIN_HITS_TO_ESTABLISH = 3  # Bot-SORT's min_hits parameter
+            MIN_HITS_TO_CONFIRM = (
+                5  # Provide 5 detections total to ensure track is confirmed
+            )
 
             if not tracking_active:
                 # Initial detection - need to establish track with multiple detections
@@ -413,7 +417,7 @@ def test_tracking(
                     logger.info(
                         f"✓ Object detected: x={bbox.x:.0f}, y={bbox.y:.0f}, "
                         f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f} "
-                        f"(establishing track: {_consecutive_detections}/{MIN_HITS_TO_ESTABLISH})"
+                        f"(establishing track: {_consecutive_detections}/{MIN_HITS_TO_CONFIRM})"
                     )
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
@@ -434,12 +438,11 @@ def test_tracking(
                 # For first MIN_HITS_TO_ESTABLISH frames AFTER tracking_active=True,
                 # provide detections to establish track
                 # After that, re-detect periodically
-                if _consecutive_detections < MIN_HITS_TO_ESTABLISH:
-                    # Provide detections for first few frames to establish track (min_hits=3)
-                    # CRITICAL: We need 3 consecutive detections for Bot-SORT to confirm track
-                    # Even if detection fails, we should try to continue tracking with prediction
+                if _consecutive_detections < MIN_HITS_TO_CONFIRM:
+                    # Provide detections for first few frames to establish and confirm track
+                    # Bot-SORT needs min_hits=3, but we provide 5 to ensure track is fully confirmed
                     logger.info(
-                        f"Frame {frame_count}: Establishing track (detection {_consecutive_detections + 1}/{MIN_HITS_TO_ESTABLISH})..."
+                        f"Frame {frame_count}: Establishing track (detection {_consecutive_detections + 1}/{MIN_HITS_TO_CONFIRM})..."
                     )
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=True
@@ -447,13 +450,13 @@ def test_tracking(
                     if success and bbox:
                         _consecutive_detections += 1
                         logger.info(
-                            f"✓ Track establishment progress: {_consecutive_detections}/{MIN_HITS_TO_ESTABLISH}"
+                            f"✓ Track establishment progress: {_consecutive_detections}/{MIN_HITS_TO_CONFIRM}"
                         )
                     else:
                         # Detection failed during establishment
                         # Try to continue tracking with prediction (don't reset immediately)
                         logger.warning(
-                            f"Detection failed during track establishment ({_consecutive_detections + 1}/{MIN_HITS_TO_ESTABLISH}), trying prediction..."
+                            f"Detection failed during track establishment ({_consecutive_detections + 1}/{MIN_HITS_TO_CONFIRM}), trying prediction..."
                         )
                         # Try tracking without detection (Bot-SORT prediction)
                         success, bbox, state = tracker.detect_and_track(
@@ -467,7 +470,7 @@ def test_tracking(
                             tracking_active = False
                             _consecutive_detections = 0
                 elif (
-                    _consecutive_detections >= MIN_HITS_TO_ESTABLISH
+                    _consecutive_detections >= MIN_HITS_TO_CONFIRM
                     and frame_count % REDETECT_INTERVAL == 0
                 ):
                     # Periodic re-detection to refresh the track
@@ -499,8 +502,8 @@ def test_tracking(
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
                     # If we're past establishment phase, tracking is working
-                    if _consecutive_detections >= MIN_HITS_TO_ESTABLISH:
-                        _consecutive_detections = MIN_HITS_TO_ESTABLISH  # Keep at max
+                    if _consecutive_detections >= MIN_HITS_TO_CONFIRM:
+                        _consecutive_detections = MIN_HITS_TO_CONFIRM  # Keep at max
 
                     # Show tracking info
                     if state:
@@ -517,9 +520,9 @@ def test_tracking(
                     # Tracking failed
                     failed_tracks += 1
                     # If we're still establishing track, try one more time with detection
-                    if _consecutive_detections < MIN_HITS_TO_ESTABLISH:
+                    if _consecutive_detections < MIN_HITS_TO_CONFIRM:
                         logger.warning(
-                            f"Frame {frame_count}: Tracking lost during establishment ({_consecutive_detections}/{MIN_HITS_TO_ESTABLISH}), will retry detection next frame"
+                            f"Frame {frame_count}: Tracking lost during establishment ({_consecutive_detections}/{MIN_HITS_TO_CONFIRM}), will retry detection next frame"
                         )
                         # Don't reset yet - give it another chance
                     else:
