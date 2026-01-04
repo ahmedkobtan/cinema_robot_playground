@@ -4,9 +4,10 @@ import os
 from ahmedkobtan_cinema_robot_playground.src.utils.config_utils import (  # noqa
     parse_config,
 )
-from tests.src.utils.mocked_dev_json import dev_configs
-from tests.src.utils.mocked_prod_json import prod_configs
-from tests.src.utils.mocked_qa_json import qa_configs
+
+from .mocked_dev_json import dev_configs
+from .mocked_prod_json import prod_configs
+from .mocked_qa_json import qa_configs
 
 logger = logging.getLogger("default")
 
