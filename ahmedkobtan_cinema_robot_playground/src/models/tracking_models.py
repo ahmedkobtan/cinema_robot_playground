@@ -91,6 +91,8 @@ class BotSORTTracker(Tracker):
     def _initialize_tracker(self) -> bool:
         """Initialize Bot-SORT tracker."""
         try:
+            import warnings
+
             import torch  # noqa: F401 - used by BotSort
             from boxmot import BotSort  # Note: BotSort, not BoTSORT
 
@@ -123,11 +125,16 @@ class BotSORTTracker(Tracker):
                 # Fallback to current directory (boxmot will auto-download if needed)
                 reid_weights_path = Path("osnet_x0_25_msmt17.pt")
 
-            self.tracker = BotSort(
-                reid_weights=reid_weights_path,
-                device=device_str,  # Pass as string, not torch.device object
-                half=False,  # Use full precision (half=True for FP16 on GPU)
-            )
+            # Suppress ECC warnings (they're harmless - just mean no camera motion detected)
+            # CMC is useful when camera is moving (pan/tilt/wheels), so we keep it enabled
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*ECC did not converge.*")
+                self.tracker = BotSort(
+                    reid_weights=reid_weights_path,
+                    device=device_str,  # Pass as string, not torch.device object
+                    half=False,  # Use full precision (half=True for FP16 on GPU)
+                    # cmc_method="ecc" is default - keep enabled for moving camera scenarios
+                )
             self._initialized = True
             logger.info("Bot-SORT tracker initialized")
             return True
