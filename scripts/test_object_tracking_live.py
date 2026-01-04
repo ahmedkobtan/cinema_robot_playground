@@ -409,9 +409,11 @@ def test_tracking(
                 if success and bbox:
                     # Track established - will provide detections for first 3 frames to confirm track
                     tracking_active = True
+                    _consecutive_detections = 1  # First detection
                     logger.info(
                         f"✓ Object detected: x={bbox.x:.0f}, y={bbox.y:.0f}, "
-                        f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f}"
+                        f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f} "
+                        f"(establishing track: {_consecutive_detections}/{MIN_HITS_TO_ESTABLISH})"
                     )
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
@@ -429,17 +431,33 @@ def test_tracking(
                     )
             else:
                 # Continue tracking
-                # For first MIN_HITS_TO_ESTABLISH frames, provide detections to establish track
+                # For first MIN_HITS_TO_ESTABLISH frames AFTER tracking_active=True,
+                # provide detections to establish track
                 # After that, re-detect periodically
-                if frame_count <= MIN_HITS_TO_ESTABLISH:
+                if _consecutive_detections < MIN_HITS_TO_ESTABLISH:
                     # Provide detections for first few frames to establish track (min_hits=3)
                     logger.debug(
-                        f"Frame {frame_count}: Establishing track (detection {frame_count}/{MIN_HITS_TO_ESTABLISH})..."
+                        f"Frame {frame_count}: Establishing track (detection {_consecutive_detections + 1}/{MIN_HITS_TO_ESTABLISH})..."
                     )
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=True
                     )
-                elif frame_count % REDETECT_INTERVAL == 0:
+                    if success and bbox:
+                        _consecutive_detections += 1
+                        logger.debug(
+                            f"✓ Track establishment progress: {_consecutive_detections}/{MIN_HITS_TO_ESTABLISH}"
+                        )
+                    else:
+                        # Detection failed during establishment - reset
+                        logger.warning(
+                            "Detection failed during track establishment, resetting..."
+                        )
+                        tracking_active = False
+                        _consecutive_detections = 0
+                elif (
+                    _consecutive_detections >= MIN_HITS_TO_ESTABLISH
+                    and frame_count % REDETECT_INTERVAL == 0
+                ):
                     # Periodic re-detection to refresh the track
                     logger.debug(
                         f"Frame {frame_count}: Re-detecting '{text_prompt}'..."
@@ -468,6 +486,9 @@ def test_tracking(
                 if success and bbox:
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
+                    # If we're past establishment phase, tracking is working
+                    if _consecutive_detections >= MIN_HITS_TO_ESTABLISH:
+                        _consecutive_detections = MIN_HITS_TO_ESTABLISH  # Keep at max
 
                     # Show tracking info
                     if state:
@@ -483,7 +504,13 @@ def test_tracking(
                 else:
                     logger.warning(f"Frame {frame_count}: Tracking lost")
                     failed_tracks += 1
+                    # If tracking fails after establishment, reset
+                    if _consecutive_detections >= MIN_HITS_TO_ESTABLISH:
+                        logger.warning(
+                            "Tracking lost after establishment, resetting..."
+                        )
                     tracking_active = False
+                    _consecutive_detections = 0
                     cv2.putText(
                         display_frame,
                         "Tracking lost - Re-detecting...",
