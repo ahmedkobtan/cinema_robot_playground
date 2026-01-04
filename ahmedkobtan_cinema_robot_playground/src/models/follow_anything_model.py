@@ -15,7 +15,7 @@ Uses:
 - Bot-SORT (via boxmot) - for tracking
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -299,14 +299,35 @@ class FollowAnythingModel(DetectionModel, Tracker):
             return False
 
     def _load_tracker(self) -> bool:
-        """Load Bot-SORT tracker."""
+        """Load Bot-SORT tracker wrapped with SmartTracker for automatic re-detection."""
         try:
             from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
                 BotSORTTracker,
+                SmartTracker,
             )
 
-            self.tracker = BotSORTTracker(device=self.device)
-            return self.tracker.is_available()
+            base_tracker = BotSORTTracker(device=self.device)
+            if not base_tracker.is_available():
+                return False
+
+            # Wrap with SmartTracker that handles re-detection logic
+            # Detection callback will use self.detect() for re-detection
+            def detection_callback(frame: np.ndarray):
+                """Callback for automatic re-detection."""
+                if self._stored_query_features is None:
+                    return None
+                # Use stored text prompt for re-detection
+                # We'll need to store the text prompt - for now, return None
+                # (re-detection will be handled manually via update() with initial_bbox)
+                return None
+
+            self.tracker = SmartTracker(
+                base_tracker=base_tracker,
+                detection_callback=None,  # Manual re-detection via update() with initial_bbox
+                min_hits_to_confirm=5,
+                redetect_interval=10,
+            )
+            return True
         except Exception as e:
             logger.warning(f"Error loading Bot-SORT tracker: {e}")
             return False
@@ -322,102 +343,112 @@ class FollowAnythingModel(DetectionModel, Tracker):
             return True
         return False
 
-    def _get_masks_sam2(self, image_rgb: np.ndarray) -> List[np.ndarray]:
-        """Get masks using SAM 2."""
+    def _get_masks_sam2(self, image_rgb: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Get masks using SAM 2, matching original FAn format.
+
+        Original FAn uses sam.seg() which returns list of dicts with keys:
+        - 'segmentation': bool mask
+        - 'bbox': [x, y, w, h] bounding box
+        - 'area': mask area
+        - 'point_coords': point used to generate mask
+
+        Returns:
+            List of mask dictionaries matching original FAn format.
+        """
         if self.sam2_predictor is None:
             return []
 
         try:
             # Always set image - SAM 2 predictor needs it set before each prediction
-            # The comparison might fail due to array equality checks, so just set it
             self.sam2_predictor.set_image(image_rgb)
-            self._current_image = (
-                image_rgb.copy()
-            )  # Store copy to avoid reference issues
+            self._current_image = image_rgb.copy()
 
             h, w = image_rgb.shape[:2]
+            image_area = h * w
 
-            # CRITICAL FIX: Use fewer strategic points with negative constraints
-            # Too many positive points cause SAM 2 to generate full-frame masks
-            # Strategy: Use a sparse grid with negative points at corners to constrain masks
+            # Original FAn uses automatic mask generation (sam.seg())
+            # SAM 2 doesn't have SamAutomaticMaskGenerator, so we simulate it
+            # by generating masks from a grid of points (similar to how SAM's
+            # automatic mask generator works internally)
 
-            # Positive points: sparse grid (3x3) in center regions only
-            positive_points = []
-            grid_size = 3  # Smaller grid to avoid full-frame masks
-            margin = 0.15  # Margin from edges (15% of image)
-            for i in range(1, grid_size):
-                for j in range(1, grid_size):
-                    x = int(w * (margin + (1 - 2 * margin) * j / grid_size))
-                    y = int(h * (margin + (1 - 2 * margin) * i / grid_size))
-                    positive_points.append([x, y])
+            # Generate masks from a grid of points across the image
+            # This simulates automatic mask generation
+            points_per_side = 16  # Original FAn default (from model_args.py)
+            step = min(w, h) // points_per_side
 
-            # Negative points: corners and edges to constrain masks
-            # These tell SAM 2 "these areas are NOT part of the object"
-            negative_points = [
-                [w * 0.05, h * 0.05],  # Top-left corner
-                [w * 0.95, h * 0.05],  # Top-right corner
-                [w * 0.05, h * 0.95],  # Bottom-left corner
-                [w * 0.95, h * 0.95],  # Bottom-right corner
-                [w * 0.5, h * 0.05],  # Top edge
-                [w * 0.5, h * 0.95],  # Bottom edge
-                [w * 0.05, h * 0.5],  # Left edge
-                [w * 0.95, h * 0.5],  # Right edge
-            ]
+            all_mask_dicts = []
+            seen_masks = set()
 
-            # Combine points: positive first, then negative
-            all_points = positive_points + negative_points
-            points = np.array(all_points, dtype=np.float32)
+            # Sample points in a grid pattern
+            for y in range(step // 2, h, step):
+                for x in range(step // 2, w, step):
+                    points = np.array([[x, y]], dtype=np.float32)
+                    point_labels = np.array([1], dtype=np.int32)
 
-            # Labels: 1 for positive, 0 for negative
-            point_labels = np.array(
-                [1] * len(positive_points) + [0] * len(negative_points), dtype=np.int32
-            )
+                    # Generate multiple masks from this point
+                    masks, scores, _ = self.sam2_predictor.predict(
+                        point_coords=points,
+                        point_labels=point_labels,
+                        multimask_output=True,
+                    )
 
-            # Generate masks
-            masks, scores, _ = self.sam2_predictor.predict(
-                point_coords=points,
-                point_labels=point_labels,
-                multimask_output=True,
-            )
-
-            # Filter and return top masks (sorted by score, excluding full-frame masks)
-            if len(scores) > 0:
-                unique_masks = []
-                seen_masks = set()
-                image_area = h * w
-
-                for idx in np.argsort(scores)[::-1]:  # Sort descending
-                    mask = masks[idx]
-                    # Check if mask is full-frame (cover >95% of image)
-                    mask_area = np.sum(mask)
-                    coverage = mask_area / image_area if image_area > 0 else 0
-
-                    # Skip full-frame masks
-                    if coverage >= 0.95:
-                        continue
-
-                    # Simple hash to avoid exact duplicates
-                    mask_hash = hash(mask.tobytes()[:1000])  # First 1000 bytes
-                    if mask_hash not in seen_masks:
-                        unique_masks.append(mask)
-                        seen_masks.add(mask_hash)
-                        if len(unique_masks) >= 5:  # Top 5 unique masks
-                            break
-
-                # If no good masks found, return top 3 anyway (might be needed for some objects)
-                if not unique_masks and len(masks) > 0:
-                    for idx in np.argsort(scores)[::-1][:3]:
-                        mask = masks[idx]
+                    # Convert to FAn format (list of dicts)
+                    for mask, score in zip(masks, scores):
                         mask_area = np.sum(mask)
                         coverage = mask_area / image_area if image_area > 0 else 0
-                        # Only include if not too large (allow up to 98% for edge cases)
-                        if coverage < 0.98:
-                            unique_masks.append(mask)
-                            if len(unique_masks) >= 3:
+
+                        # Skip full-frame masks (coverage > 90%)
+                        if coverage >= 0.90:
+                            continue
+
+                        # Skip very small masks
+                        if mask_area < 200:  # min_area_size default
+                            continue
+
+                        # Get bounding box
+                        y_indices, x_indices = np.where(mask)
+                        if len(x_indices) == 0 or len(y_indices) == 0:
+                            continue
+
+                        x_min, x_max = int(x_indices.min()), int(x_indices.max())
+                        y_min, y_max = int(y_indices.min()), int(y_indices.max())
+                        bbox = [
+                            x_min,
+                            y_min,
+                            x_max - x_min,
+                            y_max - y_min,
+                        ]  # [x, y, w, h]
+
+                        # Create mask dict matching original FAn format
+                        mask_dict = {
+                            "segmentation": mask,
+                            "bbox": bbox,
+                            "area": int(mask_area),
+                            "point_coords": [x, y],
+                            "score": float(score),
+                        }
+
+                        # Deduplicate using simple hash
+                        mask_hash = hash(mask.tobytes()[:1000])
+                        if mask_hash not in seen_masks:
+                            all_mask_dicts.append(mask_dict)
+                            seen_masks.add(mask_hash)
+
+                            # Limit total masks to avoid memory issues
+                            if len(all_mask_dicts) >= 100:
                                 break
 
-                return unique_masks
-            return []
+                if len(all_mask_dicts) >= 100:
+                    break
+
+            # Sort by score (original FAn sorts by cfg['sort_by'], default is 'area')
+            # We'll sort by score (quality) then by area
+            all_mask_dicts.sort(key=lambda x: (x["score"], x["area"]), reverse=True)
+
+            # Return top masks (original FAn doesn't limit, but we limit for efficiency)
+            return all_mask_dicts[:50]  # Top 50 masks
+
         except Exception as e:
             logger.warning(f"Error generating SAM 2 masks: {e}")
             import traceback
@@ -464,14 +495,24 @@ class FollowAnythingModel(DetectionModel, Tracker):
             boxes = []
 
             # FAn detection pipeline:
-            # 1. Get masks from SAM 2
-            masks = []
+            # 1. Get masks from SAM 2 (returns list of dicts matching original FAn format)
+            mask_dicts = []
             if self.use_sam2 and self.sam2_predictor is not None:
-                masks = self._get_masks_sam2(image_rgb)
+                mask_dicts = self._get_masks_sam2(image_rgb)
 
-            if not masks:
+            if not mask_dicts:
                 # Fallback to simple mask (full image) when SAM 2 not available
-                masks = self._get_masks_simple(image_rgb)
+                h, w = image_rgb.shape[:2]
+                full_mask = np.ones((h, w), dtype=bool)
+                mask_dicts = [
+                    {
+                        "segmentation": full_mask,
+                        "bbox": [0, 0, w, h],
+                        "area": h * w,
+                        "point_coords": [w // 2, h // 2],
+                        "score": 1.0,
+                    }
+                ]
 
             # 2. Extract query features using Open-CLIP or DINO
             query_features = None
@@ -504,27 +545,42 @@ class FollowAnythingModel(DetectionModel, Tracker):
 
             # Log mask count for debugging (use INFO level so it shows up)
             logger.info(
-                f"FAn: Evaluating {len(masks)} masks from SAM 2 for query: '{text_prompt}'"
+                f"FAn: Evaluating {len(mask_dicts)} masks from SAM 2 for query: '{text_prompt}'"
             )
 
-            if not masks:
+            if not mask_dicts:
                 logger.warning(
                     f"No masks generated by SAM 2 for query: '{text_prompt}'"
                 )
                 return []
 
-            for mask in masks:
-                # Extract features from masked region
-                masked_image = image_rgb * mask[:, :, np.newaxis]
+            # Original FAn: Skip first mask (ii == 0) and filter by min_area_size
+            # Also extract features from ROI bbox, not full masked image
+            MIN_AREA_SIZE = 200  # Original FAn default
 
-                # For text queries: Use CLIP for masked regions (matches CLIP text features - 512-dim)
-                # This is the correct approach per original FAn methodology
+            for idx, mask_dict in enumerate(mask_dicts):
+                # Skip first mask (original FAn does this: if ii == 0: continue)
+                if idx == 0:
+                    continue
+
+                # Filter by min_area_size (original FAn: if mask['area'] < min_area_size: continue)
+                if mask_dict["area"] < MIN_AREA_SIZE:
+                    continue
+
+                # Get mask and bbox from dict (matching original FAn format)
+                mask = mask_dict["segmentation"]
+                _x, _y, _w, _h = mask_dict["bbox"]  # [x, y, w, h] format
+
+                # Extract ROI from bbox (original FAn approach)
+                # Original FAn: img_roi = frameshow[_y : _y + _h, _x : _x + _w, :]
+                img_roi = image_rgb[_y : _y + _h, _x : _x + _w, :]
+
+                # For text queries: Use CLIP for ROI (matches CLIP text features - 512-dim)
+                # Original FAn: Extract features from ROI bbox, not full masked image
                 if self.clip_model is not None:
                     try:
-                        # Preprocess image
-                        pil_image = transforms.ToPILImage()(
-                            masked_image.astype(np.uint8)
-                        )
+                        # Preprocess ROI image (original FAn approach)
+                        pil_image = transforms.ToPILImage()(img_roi)
                         image_tensor = (
                             self.clip_preprocess(pil_image).unsqueeze(0).to(self.device)
                         )
@@ -575,25 +631,31 @@ class FollowAnythingModel(DetectionModel, Tracker):
                     bbox_width = x_max - x_min
                     bbox_height = y_max - y_min
 
-                    # Reject full-frame detections (cover >95% of image)
+                    # Reject full-frame detections (cover >90% of image - lowered from 95%)
+                    # Original FAn uses class_threshold=0.4, but CLIP similarities are lower
                     bbox_area = bbox_width * bbox_height
                     image_area = w * h
                     area_coverage = bbox_area / image_area if image_area > 0 else 0
 
                     # Check similarity threshold
-                    # CLIP similarity scores are typically lower than DINO
-                    # Original FAn uses lower thresholds for CLIP-based matching
-                    # Lowered further to improve detection (CLIP similarities are often 0.15-0.30 range)
-                    # If using stored features (re-detection), use lower threshold
-                    similarity_threshold = 0.12 if use_stored_features else 0.15
+                    # Original FAn uses class_threshold=0.4 (default) for DINO
+                    # For CLIP, similarities are typically lower (0.15-0.30 range)
+                    # However, since we extract ROI from bbox (not full masked image),
+                    # similarities might be higher. Original FAn uses 0.4 for both.
+                    # But based on logs, CLIP similarities are 0.22-0.27, so we use 0.25
+                    # as a compromise - still higher than before (0.15) but realistic for CLIP
+                    # If using stored features (re-detection), use slightly lower threshold
+                    similarity_threshold = 0.22 if use_stored_features else 0.25
 
                     # Log similarity for debugging (use INFO level so it shows up)
                     logger.info(
                         f"FAn: Best mask similarity: {best_score:.3f} (threshold: {similarity_threshold:.3f}), "
-                        f"coverage: {area_coverage:.2%}, masks evaluated: {len(masks)}"
+                        f"coverage: {area_coverage:.2%}, masks evaluated: {len(mask_dicts)}"
                     )
 
-                    if best_score > similarity_threshold and area_coverage < 0.95:
+                    # Lower coverage threshold from 95% to 90% to allow larger objects
+                    # But still reject full-frame detections
+                    if best_score > similarity_threshold and area_coverage < 0.90:
                         # If re-detecting with stored features, compare to stored features
                         if use_stored_features and best_mask_features is not None:
                             # Compare to average of stored features
@@ -800,11 +862,19 @@ class FollowAnythingFallback(DetectionModel, Tracker):
         )
         from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
             BotSORTTracker,
+            SmartTracker,
         )
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.detector = GroundingDINOModel(device=self.device)
-        self.tracker = BotSORTTracker(device=self.device)
+        base_tracker = BotSORTTracker(device=self.device)
+        # Wrap with SmartTracker for automatic re-detection logic
+        self.tracker = SmartTracker(
+            base_tracker=base_tracker,
+            detection_callback=None,  # Manual re-detection via update() with initial_bbox
+            min_hits_to_confirm=5,
+            redetect_interval=10,
+        )
         self._tracking_initialized = False
 
     def detect(

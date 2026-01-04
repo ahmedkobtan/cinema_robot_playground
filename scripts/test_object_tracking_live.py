@@ -394,14 +394,17 @@ def test_tracking(
             display_frame = frame.copy()
 
             # Detect or track
-            # Bot-SORT requires min_hits=3 to confirm a track, so we need to provide
-            # detections for the first 3 frames to establish the track
-            # Then provide a few more detections to ensure track is fully confirmed
-            REDETECT_INTERVAL = 10
-            # MIN_HITS_TO_ESTABLISH = 3  # Bot-SORT's min_hits parameter
-            MIN_HITS_TO_CONFIRM = (
-                5  # Provide 5 detections total to ensure track is confirmed
-            )
+            # NOTE: Tracking logic is now handled internally by SmartTracker wrapper
+            # The tracker automatically handles:
+            # - Track establishment (first 5 frames with detections)
+            # - Periodic re-detection (every 10 frames)
+            # - Fallback to prediction when re-detection fails
+            #
+            # We just need to:
+            # 1. Detect initially when tracking_active=False
+            # 2. Provide detections for establishment (first few frames)
+            # 3. Let tracker handle periodic re-detection automatically
+            # 4. Manually re-detect if tracking fails
 
             if not tracking_active:
                 # Initial detection - need to establish track with multiple detections
@@ -411,13 +414,11 @@ def test_tracking(
                 )
 
                 if success and bbox:
-                    # Track established - will provide detections for first 3 frames to confirm track
+                    # Track established - SmartTracker will handle establishment phase internally
                     tracking_active = True
-                    _consecutive_detections = 1  # First detection
                     logger.info(
                         f"✓ Object detected: x={bbox.x:.0f}, y={bbox.y:.0f}, "
-                        f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f} "
-                        f"(establishing track: {_consecutive_detections}/{MIN_HITS_TO_CONFIRM})"
+                        f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f}"
                     )
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
@@ -434,66 +435,28 @@ def test_tracking(
                         2,
                     )
             else:
-                # Continue tracking
-                # For first MIN_HITS_TO_ESTABLISH frames AFTER tracking_active=True,
-                # provide detections to establish track
-                # After that, re-detect periodically
-                if _consecutive_detections < MIN_HITS_TO_CONFIRM:
-                    # Provide detections for first few frames to establish and confirm track
-                    # Bot-SORT needs min_hits=3, but we provide 5 to ensure track is fully confirmed
-                    logger.info(
-                        f"Frame {frame_count}: Establishing track (detection {_consecutive_detections + 1}/{MIN_HITS_TO_CONFIRM})..."
-                    )
-                    success, bbox, state = tracker.detect_and_track(
-                        frame, text_prompt, initial_detection=True
-                    )
-                    if success and bbox:
-                        _consecutive_detections += 1
-                        logger.info(
-                            f"✓ Track establishment progress: {_consecutive_detections}/{MIN_HITS_TO_CONFIRM}"
-                        )
-                    else:
-                        # Detection failed during establishment
-                        # Try to continue tracking with prediction (don't reset immediately)
-                        logger.warning(
-                            f"Detection failed during track establishment ({_consecutive_detections + 1}/{MIN_HITS_TO_CONFIRM}), trying prediction..."
-                        )
-                        # Try tracking without detection (Bot-SORT prediction)
-                        success, bbox, state = tracker.detect_and_track(
-                            frame, text_prompt, initial_detection=False
-                        )
-                        if not success or not bbox:
-                            # Tracking also failed - reset
-                            logger.warning(
-                                "Both detection and tracking failed, resetting..."
-                            )
-                            tracking_active = False
-                            _consecutive_detections = 0
-                elif (
-                    _consecutive_detections >= MIN_HITS_TO_CONFIRM
-                    and frame_count % REDETECT_INTERVAL == 0
-                ):
-                    # Periodic re-detection to refresh the track
+                # Continue tracking - SmartTracker handles re-detection logic internally
+                # We provide detections for establishment phase, then let tracker handle periodic re-detection
+                # For establishment: provide detections for first 5 frames
+                # After that: tracker will re-detect every 10 frames automatically
+
+                # Check if we're still in establishment phase (first 5 frames after initial detection)
+                # We'll track this with a simple counter
+                if not hasattr(tracker, "_establishment_count"):
+                    tracker._establishment_count = 0
+
+                if tracker._establishment_count < 5:
+                    # Establishment phase: provide detections
+                    tracker._establishment_count += 1
                     logger.debug(
-                        f"Frame {frame_count}: Re-detecting '{text_prompt}'..."
+                        f"Frame {frame_count}: Establishing track ({tracker._establishment_count}/5)..."
                     )
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=True
                     )
-                    if success and bbox:
-                        # Re-detection successful, track refreshed
-                        logger.debug(
-                            f"✓ Track refreshed: x={bbox.x:.0f}, y={bbox.y:.0f}, "
-                            f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f}"
-                        )
-                    else:
-                        # Re-detection failed, try to continue with existing track
-                        success, bbox, state = tracker.detect_and_track(
-                            frame, text_prompt, initial_detection=False
-                        )
                 else:
-                    # Continue tracking without re-detection
-                    # Bot-SORT will use Kalman filter prediction
+                    # After establishment: let SmartTracker handle periodic re-detection
+                    # It will automatically re-detect every 10 frames
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=False
                     )
@@ -501,9 +464,6 @@ def test_tracking(
                 if success and bbox:
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
-                    # If we're past establishment phase, tracking is working
-                    if _consecutive_detections >= MIN_HITS_TO_CONFIRM:
-                        _consecutive_detections = MIN_HITS_TO_CONFIRM  # Keep at max
 
                     # Show tracking info
                     if state:
@@ -517,21 +477,12 @@ def test_tracking(
                             2,
                         )
                 else:
-                    # Tracking failed
+                    # Tracking failed - reset and re-detect
                     failed_tracks += 1
-                    # If we're still establishing track, try one more time with detection
-                    if _consecutive_detections < MIN_HITS_TO_CONFIRM:
-                        logger.warning(
-                            f"Frame {frame_count}: Tracking lost during establishment ({_consecutive_detections}/{MIN_HITS_TO_CONFIRM}), will retry detection next frame"
-                        )
-                        # Don't reset yet - give it another chance
-                    else:
-                        # Tracking lost after establishment - reset
-                        logger.warning(
-                            f"Frame {frame_count}: Tracking lost after establishment, resetting..."
-                        )
-                        tracking_active = False
-                        _consecutive_detections = 0
+                    logger.warning(f"Frame {frame_count}: Tracking lost, resetting...")
+                    tracking_active = False
+                    if hasattr(tracker, "_establishment_count"):
+                        tracker._establishment_count = 0
                     cv2.putText(
                         display_frame,
                         "Tracking lost - Re-detecting...",

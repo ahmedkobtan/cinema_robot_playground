@@ -160,7 +160,7 @@ class GroundingDINOModel(DetectionModel):
             results = self.processor.post_process_grounded_object_detection(
                 outputs,
                 target_sizes=[(image.shape[0], image.shape[1])],
-                threshold=0.20,  # Lowered from 0.25 to 0.20 for better detection of difficult objects
+                threshold=0.18,  # Lowered from 0.20 to 0.18 for better detection of "lamp" and similar objects
             )[0]
 
             boxes = []

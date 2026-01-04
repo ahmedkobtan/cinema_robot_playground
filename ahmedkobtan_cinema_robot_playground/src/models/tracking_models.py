@@ -1,7 +1,7 @@
 """Tracking model interfaces for object tracking."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -313,3 +313,150 @@ class MockTracker(Tracker):
     def is_available(self) -> bool:
         """Mock tracker is always available."""
         return True
+
+
+class SmartTracker(Tracker):
+    """
+    Smart tracker wrapper that handles re-detection logic internally.
+
+    This wrapper manages:
+    - Track establishment phase (first N frames with detections)
+    - Periodic re-detection (every M frames)
+    - Automatic fallback to prediction when re-detection fails
+
+    This eliminates the need for complex tracking logic in test scripts.
+    The original FAn uses AOT which tracks continuously, but Bot-SORT
+    requires periodic re-detections. This wrapper bridges that gap.
+    """
+
+    def __init__(
+        self,
+        base_tracker: Tracker,
+        detection_callback: Optional[
+            Callable[[np.ndarray], Optional[Tuple[float, float, float, float]]]
+        ] = None,
+        min_hits_to_confirm: int = 5,
+        redetect_interval: int = 10,
+    ):
+        """
+        Initialize smart tracker.
+
+        Args:
+            base_tracker: Underlying tracker (e.g., BotSORTTracker)
+            detection_callback: Optional function(frame) -> Optional[bbox] for re-detection
+            min_hits_to_confirm: Number of consecutive detections needed to confirm track
+            redetect_interval: Re-detect every N frames after confirmation
+        """
+        self.base_tracker = base_tracker
+        self.detection_callback = detection_callback
+        self.min_hits_to_confirm = min_hits_to_confirm
+        self.redetect_interval = redetect_interval
+
+        # Internal state
+        self._frame_count = 0
+        self._consecutive_detections = 0
+        self._track_confirmed = False
+        self._last_bbox = None
+
+    def update(
+        self,
+        frame: np.ndarray,
+        initial_bbox: Optional[Tuple[float, float, float, float]] = None,
+    ) -> Optional[TrackingState]:
+        """
+        Update tracker with new frame, handling re-detection logic automatically.
+
+        Logic:
+        - If initial_bbox provided: Use it (establishment phase)
+        - If track not confirmed: Continue providing detections
+        - If track confirmed and frame_count % redetect_interval == 0: Re-detect
+        - Otherwise: Use prediction (no detection)
+        """
+        self._frame_count += 1
+
+        # If initial bbox provided, use it (establishment or manual re-detection)
+        if initial_bbox is not None:
+            self._consecutive_detections += 1
+            self._last_bbox = initial_bbox
+            if self._consecutive_detections >= self.min_hits_to_confirm:
+                self._track_confirmed = True
+            return self.base_tracker.update(frame, initial_bbox)
+
+        # Track not confirmed yet - need more detections
+        if not self._track_confirmed:
+            # Try to get detection from callback if available
+            if self.detection_callback is not None:
+                detected_bbox = self.detection_callback(frame)
+                if detected_bbox is not None:
+                    self._consecutive_detections += 1
+                    self._last_bbox = detected_bbox
+                    if self._consecutive_detections >= self.min_hits_to_confirm:
+                        self._track_confirmed = True
+                    return self.base_tracker.update(frame, detected_bbox)
+
+            # No detection available - try prediction
+            state = self.base_tracker.update(frame, None)
+            if state is None:
+                # Prediction failed - reset
+                self._consecutive_detections = 0
+                self._track_confirmed = False
+            return state
+
+        # Track confirmed - periodic re-detection
+        if self._track_confirmed:
+            # Check if it's time to re-detect
+            if self._frame_count % self.redetect_interval == 0:
+                # Periodic re-detection
+                if self.detection_callback is not None:
+                    detected_bbox = self.detection_callback(frame)
+                    if detected_bbox is not None:
+                        # Re-detection successful
+                        self._last_bbox = detected_bbox
+                        return self.base_tracker.update(frame, detected_bbox)
+                    else:
+                        # Re-detection failed - try prediction
+                        logger.debug("Re-detection failed, using prediction")
+                        return self.base_tracker.update(frame, None)
+                else:
+                    # No callback - use prediction
+                    return self.base_tracker.update(frame, None)
+            else:
+                # Between re-detections - use prediction
+                return self.base_tracker.update(frame, None)
+
+        # Fallback
+        return self.base_tracker.update(frame, None)
+
+    def reset(self) -> None:
+        """Reset tracker state."""
+        self.base_tracker.reset()
+        self._frame_count = 0
+        self._consecutive_detections = 0
+        self._track_confirmed = False
+        self._last_bbox = None
+
+    def is_available(self) -> bool:
+        """Check if tracker is available."""
+        return self.base_tracker.is_available()
+
+    def force_redetect(self, frame: np.ndarray) -> Optional[TrackingState]:
+        """
+        Force immediate re-detection (useful for manual re-detection).
+
+        Args:
+            frame: Current video frame
+
+        Returns:
+            Tracking state or None if re-detection failed
+        """
+        if self.detection_callback is not None:
+            detected_bbox = self.detection_callback(frame)
+            if detected_bbox is not None:
+                self._last_bbox = detected_bbox
+                self._consecutive_detections = min(
+                    self._consecutive_detections + 1, self.min_hits_to_confirm
+                )
+                if self._consecutive_detections >= self.min_hits_to_confirm:
+                    self._track_confirmed = True
+                return self.base_tracker.update(frame, detected_bbox)
+        return None

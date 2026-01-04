@@ -218,3 +218,5 @@ poetry.lock
 
 # test images
 *.png
+
+FollowAnything/
