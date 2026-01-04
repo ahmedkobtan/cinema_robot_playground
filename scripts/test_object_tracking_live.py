@@ -394,17 +394,20 @@ def test_tracking(
             display_frame = frame.copy()
 
             # Detect or track
-            # Re-detect every 10 frames to refresh detection (Bot-SORT needs periodic detections)
+            # Bot-SORT requires min_hits=3 to confirm a track, so we need to provide
+            # detections for the first 3 frames to establish the track
             REDETECT_INTERVAL = 10
+            MIN_HITS_TO_ESTABLISH = 3  # Bot-SORT's min_hits parameter
 
             if not tracking_active:
-                # Initial detection
+                # Initial detection - need to establish track with multiple detections
                 logger.info(f"Frame {frame_count}: Detecting '{text_prompt}'...")
                 success, bbox, state = tracker.detect_and_track(
                     frame, text_prompt, initial_detection=True
                 )
 
                 if success and bbox:
+                    # Track established - will provide detections for first 3 frames to confirm track
                     tracking_active = True
                     logger.info(
                         f"✓ Object detected: x={bbox.x:.0f}, y={bbox.y:.0f}, "
@@ -425,10 +428,18 @@ def test_tracking(
                         2,
                     )
             else:
-                # Continue tracking - re-detect periodically to refresh
-                # Bot-SORT can maintain tracks for a few frames using Kalman filter,
-                # but we need to re-detect periodically for accuracy
-                if frame_count % REDETECT_INTERVAL == 0:
+                # Continue tracking
+                # For first MIN_HITS_TO_ESTABLISH frames, provide detections to establish track
+                # After that, re-detect periodically
+                if frame_count <= MIN_HITS_TO_ESTABLISH:
+                    # Provide detections for first few frames to establish track (min_hits=3)
+                    logger.debug(
+                        f"Frame {frame_count}: Establishing track (detection {frame_count}/{MIN_HITS_TO_ESTABLISH})..."
+                    )
+                    success, bbox, state = tracker.detect_and_track(
+                        frame, text_prompt, initial_detection=True
+                    )
+                elif frame_count % REDETECT_INTERVAL == 0:
                     # Periodic re-detection to refresh the track
                     logger.debug(
                         f"Frame {frame_count}: Re-detecting '{text_prompt}'..."

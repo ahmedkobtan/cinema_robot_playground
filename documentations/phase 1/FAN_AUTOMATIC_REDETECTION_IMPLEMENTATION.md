@@ -27,10 +27,10 @@ According to the original FAn paper and repository:
 **Storage During Tracking**:
 ```python
 # In update() method, when tracking is successful:
-# Extract DINO features from tracked region
+# Extract CLIP features from tracked region (matches detection features)
 tracked_region = frame[y1:y2, x1:x2]
-# Extract DINO features
-track_features = dino_model(tracked_region)
+# Extract CLIP features (512-dim, same as text query)
+track_features = clip_model.encode_image(tracked_region)
 # Store for re-detection
 _stored_features.append(track_features.cpu())
 ```
@@ -38,14 +38,16 @@ _stored_features.append(track_features.cpu())
 ### 2. Feature Extraction
 
 **For Detection**:
-- **Text Query**: CLIP encodes text prompt → `query_features`
-- **Masked Regions**: DINO extracts features from each SAM mask → `mask_features`
-- **Similarity**: Compare `query_features` with `mask_features`
+- **Text Query**: CLIP encodes text prompt → `query_features` (512-dim)
+- **Masked Regions**: CLIP encodes each SAM mask → `mask_features` (512-dim)
+- **Similarity**: Compare `query_features` with `mask_features` (same dimension)
 
 **For Re-detection**:
-- **Stored Features**: Average of stored DINO features from tracked object
-- **New Masks**: DINO extracts features from each SAM mask
-- **Similarity**: Compare stored features with new mask features
+- **Stored Features**: Average of stored CLIP features from tracked object (512-dim)
+- **New Masks**: CLIP encodes features from each SAM mask (512-dim)
+- **Similarity**: Compare stored features with new mask features (same dimension)
+
+**Note**: For text queries, we use CLIP for both text and masked regions (both 512-dim). DINOv2 (768-dim) cannot be compared with CLIP (512-dim) directly.
 
 ### 3. Re-detection Logic
 
@@ -69,11 +71,13 @@ else:
 
 | Aspect | Original FAn | Our Implementation | Status |
 |--------|-------------|-------------------|--------|
-| **Feature Model** | DINO | DINOv2 | ✅ Better (newer) |
+| **Feature Model** | DINO | DINOv2 | ✅ Better (newer, but not used for text queries) |
 | **Text Encoding** | CLIP | Open-CLIP | ✅ Equivalent |
-| **Masked Region Features** | DINO | DINOv2 | ✅ Correct |
-| **Storage** | DINO features every frame | DINOv2 features every frame | ✅ Correct |
+| **Masked Region Features (Text Query)** | CLIP | CLIP | ✅ Correct (same dimension as text) |
+| **Storage (Text Query)** | CLIP features every frame | CLIP features every frame | ✅ Correct |
 | **Re-detection** | Compare to stored features | Compare to stored features | ✅ Correct |
+
+**Note**: For text queries, we use CLIP for masked regions (not DINO) to match CLIP text features (both 512-dim). DINOv2 (768-dim) cannot be compared with CLIP (512-dim).
 
 ## Code Changes
 

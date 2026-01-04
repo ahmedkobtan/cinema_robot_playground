@@ -482,57 +482,21 @@ class FollowAnythingModel(DetectionModel, Tracker):
                 return []
 
             # 3. Compute features for each mask and find best match
-            # According to original FAn: use DINO for masked regions, CLIP only for text encoding
+            # CRITICAL: For text queries, use CLIP for both text and masked regions (same dimension)
+            # DINO is 768-dim, CLIP is 512-dim - they cannot be compared directly!
+            # Original FAn: For text queries, use CLIP for masked regions too
+            # For image/click queries (not implemented), use DINO for both
             best_mask = None
             best_score = -1.0
             best_mask_features = None  # Store features of best mask for re-detection
 
             for mask in masks:
-                # Extract features from masked region using DINO (as per original FAn)
+                # Extract features from masked region
                 masked_image = image_rgb * mask[:, :, np.newaxis]
 
-                # Use DINO for masked region features (original FAn methodology)
-                if self.dino_model is not None:
-                    try:
-                        # Preprocess for DINOv2
-                        pil_image = transforms.ToPILImage()(
-                            masked_image.astype(np.uint8)
-                        )
-                        inputs = self.dino_processor(
-                            images=pil_image, return_tensors="pt"
-                        ).to(self.device)
-
-                        with torch.no_grad():
-                            outputs = self.dino_model(**inputs)
-                            # Get CLS token or average pooled features
-                            if hasattr(outputs, "last_hidden_state"):
-                                # Average pool over spatial dimensions
-                                mask_features = outputs.last_hidden_state.mean(dim=1)
-                            elif hasattr(outputs, "pooler_output"):
-                                mask_features = outputs.pooler_output
-                            else:
-                                # Fallback: use first element
-                                mask_features = list(outputs.values())[0].mean(dim=1)
-
-                            # Normalize features
-                            mask_features = mask_features / mask_features.norm(
-                                dim=-1, keepdim=True
-                            )
-
-                        # Compute similarity with query features
-                        similarity = (query_features @ mask_features.T).item()
-
-                        if similarity > best_score:
-                            best_score = similarity
-                            best_mask = mask
-                            best_mask_features = (
-                                mask_features.cpu()
-                            )  # Store for re-detection
-                    except Exception as e:
-                        logger.warning(f"Error encoding image with DINOv2: {e}")
-                        continue
-                # Fallback to CLIP if DINO not available
-                elif self.clip_model is not None:
+                # For text queries: Use CLIP for masked regions (matches CLIP text features - 512-dim)
+                # This is the correct approach per original FAn methodology
+                if self.clip_model is not None:
                     try:
                         # Preprocess image
                         pil_image = transforms.ToPILImage()(
@@ -548,7 +512,7 @@ class FollowAnythingModel(DetectionModel, Tracker):
                                 dim=-1, keepdim=True
                             )
 
-                        # Compute similarity
+                        # Compute similarity (both are 512-dim, so this works)
                         similarity = (query_features @ image_features.T).item()
 
                         if similarity > best_score:
@@ -556,10 +520,16 @@ class FollowAnythingModel(DetectionModel, Tracker):
                             best_mask = mask
                             best_mask_features = (
                                 image_features.cpu()
-                            )  # Store for re-detection
+                            )  # Store for re-detection (CLIP features for re-detection)
                     except Exception as e:
                         logger.warning(f"Error encoding image with Open-CLIP: {e}")
                         continue
+                # Fallback: If CLIP not available, try DINO (but this won't work with text queries)
+                elif self.dino_model is not None:
+                    logger.warning(
+                        "DINO available but CLIP not available - cannot match text query with DINO features"
+                    )
+                    continue
 
             # 4. Convert best mask to bounding box
             # Check if we should use stored features for re-detection
@@ -606,7 +576,7 @@ class FollowAnythingModel(DetectionModel, Tracker):
                         )
                         boxes.append(bbox)
 
-                        # Store tracked object features for re-detection (DINO features of mask)
+                        # Store tracked object features for re-detection (CLIP features of mask)
                         if best_mask_features is not None:
                             self._stored_features.append(best_mask_features)
                             # Keep only last 30 features to avoid memory issues
@@ -637,8 +607,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
         """
         Update tracking with new frame using Follow Anything.
 
-        Implements automatic re-detection: stores DINO features of tracked object
+        Implements automatic re-detection: stores CLIP features of tracked object
         at every frame, uses them for re-detection when tracking is lost.
+        Uses CLIP features (not DINO) to match text query features (both 512-dim).
 
         Args:
             frame: Current video frame
@@ -660,9 +631,10 @@ class FollowAnythingModel(DetectionModel, Tracker):
             state = self.tracker.update(frame, initial_bbox)
 
             # Store tracked object features for automatic re-detection
-            if state is not None and self.dino_model is not None:
+            # Use CLIP features (same as detection) to ensure dimension compatibility
+            if state is not None and self.clip_model is not None:
                 try:
-                    # Extract DINO features from tracked region
+                    # Extract CLIP features from tracked region (matches detection features)
                     x, y, w, h = state.bbox
                     # Convert to int and clamp to image bounds
                     h_img, w_img = frame.shape[:2]
@@ -685,29 +657,22 @@ class FollowAnythingModel(DetectionModel, Tracker):
                                 tracked_region_rgb.astype(np.uint8)
                             )
 
-                            # Extract DINO features
-                            inputs = self.dino_processor(
-                                images=pil_image, return_tensors="pt"
-                            ).to(self.device)
+                            # Extract CLIP features (same as detection, 512-dim)
+                            image_tensor = (
+                                self.clip_preprocess(pil_image)
+                                .unsqueeze(0)
+                                .to(self.device)
+                            )
 
                             with torch.no_grad():
-                                outputs = self.dino_model(**inputs)
-                                if hasattr(outputs, "last_hidden_state"):
-                                    track_features = outputs.last_hidden_state.mean(
-                                        dim=1
-                                    )
-                                elif hasattr(outputs, "pooler_output"):
-                                    track_features = outputs.pooler_output
-                                else:
-                                    track_features = list(outputs.values())[0].mean(
-                                        dim=1
-                                    )
-
+                                track_features = self.clip_model.encode_image(
+                                    image_tensor
+                                )
                                 track_features = track_features / track_features.norm(
                                     dim=-1, keepdim=True
                                 )
 
-                            # Store features for re-detection
+                            # Store features for re-detection (CLIP features, 512-dim)
                             self._stored_features.append(track_features.cpu())
                             # Keep only last 30 features
                             if len(self._stored_features) > 30:
