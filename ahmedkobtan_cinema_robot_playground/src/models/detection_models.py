@@ -155,11 +155,12 @@ class GroundingDINOModel(DetectionModel):
                 outputs = self.model(**inputs)
 
             # Process results with lower threshold for better detection
-            # Grounding DINO can be conservative, so we lower threshold slightly
+            # Grounding DINO can be conservative, so we lower threshold further
+            # "lamp" might need even lower threshold due to lighting/context
             results = self.processor.post_process_grounded_object_detection(
                 outputs,
                 target_sizes=[(image.shape[0], image.shape[1])],
-                threshold=0.25,  # Lowered from 0.3 for better detection
+                threshold=0.20,  # Lowered from 0.25 to 0.20 for better detection of difficult objects
             )[0]
 
             boxes = []

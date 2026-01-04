@@ -490,9 +490,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
             best_score = -1.0
             best_mask_features = None  # Store features of best mask for re-detection
 
-            # Log mask count for debugging
-            logger.debug(
-                f"Evaluating {len(masks)} masks from SAM 2 for query: '{text_prompt}'"
+            # Log mask count for debugging (use INFO level so it shows up)
+            logger.info(
+                f"FAn: Evaluating {len(masks)} masks from SAM 2 for query: '{text_prompt}'"
             )
 
             if not masks:
@@ -549,10 +549,10 @@ class FollowAnythingModel(DetectionModel, Tracker):
             )
 
             if best_mask is not None:
-                logger.debug(f"Found best mask with similarity: {best_score:.3f}")
+                logger.info(f"FAn: Found best mask with similarity: {best_score:.3f}")
             else:
-                logger.debug(
-                    f"No mask matched query '{text_prompt}' (best_score: {best_score:.3f})"
+                logger.info(
+                    f"FAn: No mask matched query '{text_prompt}' (best_score: {best_score:.3f}, threshold: 0.20)"
                 )
 
             if best_mask is not None:
@@ -571,12 +571,13 @@ class FollowAnythingModel(DetectionModel, Tracker):
                     # Check similarity threshold
                     # CLIP similarity scores are typically lower than DINO
                     # Original FAn uses lower thresholds for CLIP-based matching
+                    # Lowered further to improve detection (CLIP similarities are often 0.15-0.30 range)
                     # If using stored features (re-detection), use lower threshold
-                    similarity_threshold = 0.15 if use_stored_features else 0.20
+                    similarity_threshold = 0.12 if use_stored_features else 0.15
 
-                    # Log similarity for debugging
-                    logger.debug(
-                        f"Best mask similarity: {best_score:.3f} (threshold: {similarity_threshold:.3f}), "
+                    # Log similarity for debugging (use INFO level so it shows up)
+                    logger.info(
+                        f"FAn: Best mask similarity: {best_score:.3f} (threshold: {similarity_threshold:.3f}), "
                         f"coverage: {area_coverage:.2%}, masks evaluated: {len(masks)}"
                     )
 

@@ -436,7 +436,9 @@ def test_tracking(
                 # After that, re-detect periodically
                 if _consecutive_detections < MIN_HITS_TO_ESTABLISH:
                     # Provide detections for first few frames to establish track (min_hits=3)
-                    logger.debug(
+                    # CRITICAL: We need 3 consecutive detections for Bot-SORT to confirm track
+                    # Even if detection fails, we should try to continue tracking with prediction
+                    logger.info(
                         f"Frame {frame_count}: Establishing track (detection {_consecutive_detections + 1}/{MIN_HITS_TO_ESTABLISH})..."
                     )
                     success, bbox, state = tracker.detect_and_track(
@@ -444,16 +446,26 @@ def test_tracking(
                     )
                     if success and bbox:
                         _consecutive_detections += 1
-                        logger.debug(
+                        logger.info(
                             f"✓ Track establishment progress: {_consecutive_detections}/{MIN_HITS_TO_ESTABLISH}"
                         )
                     else:
-                        # Detection failed during establishment - reset
+                        # Detection failed during establishment
+                        # Try to continue tracking with prediction (don't reset immediately)
                         logger.warning(
-                            "Detection failed during track establishment, resetting..."
+                            f"Detection failed during track establishment ({_consecutive_detections + 1}/{MIN_HITS_TO_ESTABLISH}), trying prediction..."
                         )
-                        tracking_active = False
-                        _consecutive_detections = 0
+                        # Try tracking without detection (Bot-SORT prediction)
+                        success, bbox, state = tracker.detect_and_track(
+                            frame, text_prompt, initial_detection=False
+                        )
+                        if not success or not bbox:
+                            # Tracking also failed - reset
+                            logger.warning(
+                                "Both detection and tracking failed, resetting..."
+                            )
+                            tracking_active = False
+                            _consecutive_detections = 0
                 elif (
                     _consecutive_detections >= MIN_HITS_TO_ESTABLISH
                     and frame_count % REDETECT_INTERVAL == 0
@@ -502,15 +514,21 @@ def test_tracking(
                             2,
                         )
                 else:
-                    logger.warning(f"Frame {frame_count}: Tracking lost")
+                    # Tracking failed
                     failed_tracks += 1
-                    # If tracking fails after establishment, reset
-                    if _consecutive_detections >= MIN_HITS_TO_ESTABLISH:
+                    # If we're still establishing track, try one more time with detection
+                    if _consecutive_detections < MIN_HITS_TO_ESTABLISH:
                         logger.warning(
-                            "Tracking lost after establishment, resetting..."
+                            f"Frame {frame_count}: Tracking lost during establishment ({_consecutive_detections}/{MIN_HITS_TO_ESTABLISH}), will retry detection next frame"
                         )
-                    tracking_active = False
-                    _consecutive_detections = 0
+                        # Don't reset yet - give it another chance
+                    else:
+                        # Tracking lost after establishment - reset
+                        logger.warning(
+                            f"Frame {frame_count}: Tracking lost after establishment, resetting..."
+                        )
+                        tracking_active = False
+                        _consecutive_detections = 0
                     cv2.putText(
                         display_frame,
                         "Tracking lost - Re-detecting...",
