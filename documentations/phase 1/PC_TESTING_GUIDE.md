@@ -73,6 +73,8 @@ cat benchmark_results.json
 **Troubleshooting**:
 - If Grounding DINO shows "not available": Check that transformers library is installed and model can download from HuggingFace
 - If SAM 2 fails: Verify SAM2_CHECKPOINT env var or checkpoint in resources directory
+- If Bot-SORT shows "Invalid CUDA 'device=cuda' requested": This has been fixed - Bot-SORT now automatically converts "cuda" to "0" (first GPU device). Ensure you have the latest code.
+- If Bot-SORT shows "Invalid CUDA 'device=cuda' requested": This has been fixed - Bot-SORT now automatically converts "cuda" to "0" (first GPU device)
 
 ---
 
@@ -331,6 +333,13 @@ After completing all tests, verify:
 - Check model weights in `resources/` directory
 - Verify CUDA is available: `torch.cuda.is_available()`
 - Check GPU memory: `nvidia-smi`
+
+### Issue: Bot-SORT "Invalid CUDA 'device=cuda' requested"
+**Solution**:
+- **Fixed**: Bot-SORT now automatically converts `device="cuda"` to `device="0"` (first GPU)
+- Bot-SORT expects device as string: `"cpu"`, `"0"`, `"1"`, etc. (not `"cuda"`)
+- The code now handles this conversion automatically
+- If you still see this error, ensure you have the latest code with the fix
 
 ### Issue: IP Webcam connection fails
 **Solution**:

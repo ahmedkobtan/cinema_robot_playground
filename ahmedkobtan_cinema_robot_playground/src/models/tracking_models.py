@@ -97,9 +97,20 @@ class BotSORTTracker(Tracker):
             logger.info("Initializing Bot-SORT tracker")
             import torch as torch_module
 
-            device_obj = torch_module.device(
-                self.device or ("cuda" if torch_module.cuda.is_available() else "cpu")
+            # Bot-SORT expects device as string: "cpu", "0", "1", etc. (not "cuda")
+            # Convert "cuda" to "0" (first GPU device)
+            device_str = self.device or (
+                "cuda" if torch_module.cuda.is_available() else "cpu"
             )
+            if device_str == "cuda":
+                if torch_module.cuda.is_available():
+                    device_str = "0"  # Use first GPU device
+                else:
+                    device_str = "cpu"  # Fallback to CPU if CUDA not available
+            elif device_str.startswith("cuda:"):
+                # Handle "cuda:0" format - extract device ID
+                device_str = device_str.split(":")[1]
+
             from pathlib import Path
 
             # Bot-SORT requires reid_weights as first positional arg
@@ -114,7 +125,7 @@ class BotSORTTracker(Tracker):
 
             self.tracker = BotSort(
                 reid_weights=reid_weights_path,
-                device=device_obj,
+                device=device_str,  # Pass as string, not torch.device object
                 half=False,  # Use full precision (half=True for FP16 on GPU)
             )
             self._initialized = True
