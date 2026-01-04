@@ -493,7 +493,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
                         continue
 
             # 4. Convert best mask to bounding box
-            if best_mask is not None and best_score > 0.3:  # Threshold
+            # Lower threshold to 0.25 to allow more detections through
+            # The full-frame rejection in the calling code will filter out bad detections
+            if best_mask is not None and best_score > 0.25:  # Lowered from 0.3
                 y_indices, x_indices = np.where(best_mask)
                 if len(x_indices) > 0 and len(y_indices) > 0:
                     x_min, x_max = float(x_indices.min()), float(x_indices.max())
@@ -511,19 +513,8 @@ class FollowAnythingModel(DetectionModel, Tracker):
 
                     # Store features for re-detection
                     self._stored_features.append(query_features.cpu())
-            elif best_score > 0.2:  # Lower threshold for full-image mode (no SAM)
-                # If no mask but good similarity, return full image as bbox
-                # This is less precise but allows detection without SAM
-                bbox = BoundingBox(
-                    x=0.0,
-                    y=0.0,
-                    width=float(w),
-                    height=float(h),
-                    confidence=float(best_score),
-                    class_name=text_prompt,
-                )
-                boxes.append(bbox)
-                self._stored_features.append(query_features.cpu())
+            # Remove the full-image fallback - it causes too many false positives
+            # If no good mask match, return empty (let fallback handle it)
 
             return boxes
 

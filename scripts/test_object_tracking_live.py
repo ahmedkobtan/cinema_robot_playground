@@ -136,7 +136,8 @@ class ObjectTracker:
                             and bbox.height >= h - 10
                         )
                         # Only use if confidence is reasonable and not full frame
-                        if bbox.confidence > 0.3 and not is_full_frame:
+                        # Lower threshold to 0.25 to match FAn's internal threshold
+                        if bbox.confidence > 0.25 and not is_full_frame:
                             initial_bbox = (bbox.x, bbox.y, bbox.width, bbox.height)
                             state = self.model.update(frame, initial_bbox=initial_bbox)
                             return (True, bbox, state)
@@ -395,6 +396,9 @@ def test_tracking(
             display_frame = frame.copy()
 
             # Detect or track
+            # Re-detect every 10 frames to refresh detection (Bot-SORT needs periodic detections)
+            REDETECT_INTERVAL = 10
+
             if not tracking_active:
                 # Initial detection
                 logger.info(f"Frame {frame_count}: Detecting '{text_prompt}'...")
@@ -423,10 +427,34 @@ def test_tracking(
                         2,
                     )
             else:
-                # Continue tracking
-                success, bbox, state = tracker.detect_and_track(
-                    frame, text_prompt, initial_detection=False
-                )
+                # Continue tracking - re-detect periodically to refresh
+                # Bot-SORT can maintain tracks for a few frames using Kalman filter,
+                # but we need to re-detect periodically for accuracy
+                if frame_count % REDETECT_INTERVAL == 0:
+                    # Periodic re-detection to refresh the track
+                    logger.debug(
+                        f"Frame {frame_count}: Re-detecting '{text_prompt}'..."
+                    )
+                    success, bbox, state = tracker.detect_and_track(
+                        frame, text_prompt, initial_detection=True
+                    )
+                    if success and bbox:
+                        # Re-detection successful, track refreshed
+                        logger.debug(
+                            f"✓ Track refreshed: x={bbox.x:.0f}, y={bbox.y:.0f}, "
+                            f"w={bbox.width:.0f}, h={bbox.height:.0f}, conf={bbox.confidence:.2f}"
+                        )
+                    else:
+                        # Re-detection failed, try to continue with existing track
+                        success, bbox, state = tracker.detect_and_track(
+                            frame, text_prompt, initial_detection=False
+                        )
+                else:
+                    # Continue tracking without re-detection
+                    # Bot-SORT will use Kalman filter prediction
+                    success, bbox, state = tracker.detect_and_track(
+                        frame, text_prompt, initial_detection=False
+                    )
 
                 if success and bbox:
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)

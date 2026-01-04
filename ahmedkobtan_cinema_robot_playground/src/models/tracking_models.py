@@ -151,33 +151,48 @@ class BotSORTTracker(Tracker):
         frame: np.ndarray,
         initial_bbox: Optional[Tuple[float, float, float, float]] = None,
     ) -> Optional[TrackingState]:
-        """Update tracker with new frame."""
+        """
+        Update tracker with new frame.
+
+        Note: Bot-SORT is a tracking-by-detection algorithm that requires
+        detections every frame for optimal performance. When initial_bbox is None,
+        we pass empty detections and rely on Bot-SORT's Kalman filter prediction
+        and track buffer (max_age=30 frames) to maintain tracks temporarily.
+
+        For proper tracking, callers should re-detect periodically (every 5-10 frames)
+        and pass the detection as initial_bbox to refresh the track.
+        """
         if not self.is_available():
             if not self._initialize_tracker():
                 return None
 
         try:
             if initial_bbox is not None:
-                # Initialize with bounding box
+                # Initialize or refresh with new detection
                 x, y, w, h = initial_bbox
                 detections = np.array(
                     [[x, y, x + w, y + h, 0.9, 0]]
                 )  # [x1, y1, x2, y2, conf, class]
                 tracks = self.tracker.update(detections, frame)
             else:
-                # Continue tracking
+                # Continue tracking without new detection
+                # Bot-SORT will use Kalman filter prediction and track buffer
+                # This works for a few frames (up to max_age=30), but detections
+                # should be refreshed periodically for accuracy
                 tracks = self.tracker.update(np.array([]), frame)
 
             if len(tracks) > 0:
                 # Get first track
                 track = tracks[0]
                 x1, y1, x2, y2, track_id, conf = track[:6]
-                return TrackingState(
+                state = TrackingState(
                     bbox=(float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
                     confidence=float(conf),
                     track_id=int(track_id),
                 )
+                return state
 
+            # Track lost (no tracks returned, likely exceeded max_age)
             return None
 
         except Exception as e:
