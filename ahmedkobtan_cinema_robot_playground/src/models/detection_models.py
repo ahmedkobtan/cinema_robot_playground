@@ -154,13 +154,15 @@ class GroundingDINOModel(DetectionModel):
             with torch.no_grad():
                 outputs = self.model(**inputs)
 
-            # Process results with lower threshold for better detection
-            # Grounding DINO can be conservative, so we lower threshold further
-            # "lamp" might need even lower threshold due to lighting/context
+            # Process results with adaptive threshold
+            # Use a general threshold that works for most objects
+            # Lower threshold for better recall (can filter by confidence later)
+            threshold = 0.18
+
             results = self.processor.post_process_grounded_object_detection(
                 outputs,
                 target_sizes=[(image.shape[0], image.shape[1])],
-                threshold=0.18,  # Lowered from 0.20 to 0.18 for better detection of "lamp" and similar objects
+                threshold=threshold,
             )[0]
 
             boxes = []
@@ -172,6 +174,50 @@ class GroundingDINOModel(DetectionModel):
                 results["scores"],
                 results["labels"],
             ):
+                # Filter false positives by checking if label is semantically similar to prompt
+                # Use a general approach: check if any significant words from prompt appear in label
+                # This helps filter obvious mismatches without hard-coding specific objects
+                label_str = str(label).lower() if label else ""
+                prompt_lower = text_prompt.lower() if text_prompt else ""
+
+                if text_prompt and label_str:
+                    # Extract meaningful words from prompt (ignore common words)
+                    common_words = {
+                        "a",
+                        "an",
+                        "the",
+                        "is",
+                        "are",
+                        "was",
+                        "were",
+                        "of",
+                        "in",
+                        "on",
+                        "at",
+                        "to",
+                        "for",
+                    }
+                    prompt_words = {
+                        w
+                        for w in prompt_lower.split()
+                        if w not in common_words and len(w) > 2
+                    }
+
+                    # If prompt has meaningful words, check if label contains any of them
+                    # This is a general similarity check, not object-specific
+                    if prompt_words:
+                        # Check if any prompt word appears in label (basic semantic similarity)
+                        has_similarity = any(word in label_str for word in prompt_words)
+
+                        # If no similarity at all and confidence is low, might be a false positive
+                        # But don't reject based on this alone - let confidence score handle it
+                        # Only log for debugging
+                        if not has_similarity and score < 0.3:
+                            logger.debug(
+                                f"Low confidence detection with no semantic similarity: "
+                                f"prompt '{text_prompt}' vs label '{label_str}' (score: {score:.2f})"
+                            )
+
                 x, y, x2, y2 = box.cpu().numpy()
                 bbox_width = float(x2 - x)
                 bbox_height = float(y2 - y)

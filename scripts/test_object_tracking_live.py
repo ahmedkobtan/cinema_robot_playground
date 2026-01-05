@@ -9,7 +9,7 @@ This script:
    - Follow Anything Fallback (Grounding DINO + Bot-SORT)
    - Grounding DINO + Bot-SORT (direct)
 
-Test objects: "desk lamp" and "scissors"
+Supports any text prompt for object detection and tracking
 """
 
 import sys

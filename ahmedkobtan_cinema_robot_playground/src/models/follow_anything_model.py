@@ -67,6 +67,13 @@ class FollowAnythingModel(DetectionModel, Tracker):
 
         # Model components
         self.sam2_predictor = None
+
+        # HuggingFace SAM 2 (BEST - 6x faster than original SAM, better accuracy)
+        self.hf_sam2_generator = None
+
+        # SAM 2 Video Predictor (for video tracking - separate from mask generation)
+        self.sam2_video_predictor = None
+
         self.clip_model = None
         self.clip_preprocess = None
         self.clip_tokenizer = None
@@ -92,10 +99,18 @@ class FollowAnythingModel(DetectionModel, Tracker):
     def _load_model(self) -> bool:
         """Load Follow Anything model components."""
         try:
-            # Try to load SAM 2 (preferred)
-            if self.use_sam2:
+            # Priority order for mask generation:
+            # 1. HuggingFace SAM 2 (BEST - 6x faster, better accuracy, no checkpoint needed)
+            # 2. SAM 2 with manual point sampling (fallback if HuggingFace not available)
+            # Note: SAM 2 Video Predictor is for video tracking, not mask generation
+
+            if self._load_huggingface_sam2():
+                logger.info(
+                    "HuggingFace SAM 2 loaded (OPTIMAL - 6x faster, better accuracy)"
+                )
+            elif self.use_sam2:
                 if self._load_sam2():
-                    logger.info("SAM 2 loaded successfully")
+                    logger.info("SAM 2 loaded (FALLBACK - requires checkpoint)")
                 else:
                     logger.warning("SAM 2 not available")
 
@@ -120,7 +135,9 @@ class FollowAnythingModel(DetectionModel, Tracker):
             # Check if we have minimum required components
             # We need at least CLIP or DINO for features, and ideally SAM/SAM2 for segmentation
             has_features = self.clip_model is not None or self.dino_model is not None
-            has_segmentation = self.sam2_predictor is not None
+            has_segmentation = (
+                self.hf_sam2_generator is not None or self.sam2_predictor is not None
+            )
 
             if has_features:
                 self._loaded = True
@@ -238,8 +255,11 @@ class FollowAnythingModel(DetectionModel, Tracker):
                     sam2_model = build_sam2(
                         sam2_model_cfg, sam2_checkpoint, device=self.device
                     )
+                    # CRITICAL: Ensure model is on GPU for performance
+                    if self.device != "cpu":
+                        sam2_model = sam2_model.to(self.device)
                     self.sam2_predictor = SAM2ImagePredictor(sam2_model)
-                    logger.info("SAM 2 model loaded successfully")
+                    logger.info(f"SAM 2 model loaded successfully on {self.device}")
                     return True
                 except Exception as e:
                     logger.warning(f"SAM 2 initialization failed: {e}")
@@ -254,6 +274,138 @@ class FollowAnythingModel(DetectionModel, Tracker):
                 # Mark as available but not fully initialized
                 return True
         except ImportError:
+            return False
+
+    def _load_huggingface_sam2(self) -> bool:
+        """
+        Load HuggingFace SAM 2 with mask-generation pipeline.
+
+        According to https://huggingface.co/docs/transformers/en/model_doc/sam2:
+        - Supports automatic mask generation via pipeline("mask-generation")
+        - Supports points_per_batch parameter for batching
+        - Better accuracy and 6x faster than original SAM
+        - Native batch and video support
+
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            import torch
+            from transformers import pipeline
+
+            # Try to load HuggingFace SAM 2 mask-generation pipeline
+            # Use smaller model first (faster), can upgrade to larger if needed
+            model_name = "facebook/sam2.1-hiera-base-plus"  # Start with base plus
+
+            # Check if GPU available
+            device = 0 if self.device != "cpu" and torch.cuda.is_available() else -1
+
+            logger.info(f"Loading HuggingFace SAM 2 ({model_name})...")
+            self.hf_sam2_generator = pipeline(
+                "mask-generation",
+                model=model_name,
+                device=device,
+            )
+
+            logger.info(
+                f"HuggingFace SAM 2 mask-generation pipeline loaded successfully on "
+                f"{'GPU' if device >= 0 else 'CPU'}"
+            )
+            return True
+
+        except ImportError:
+            logger.debug("HuggingFace transformers SAM 2 not available")
+            return False
+        except Exception as e:
+            logger.warning(f"Error loading HuggingFace SAM 2: {e}")
+            return False
+
+    def _load_sam2_video_predictor(self) -> bool:
+        """
+        Load SAM 2 Video Predictor with VOS optimization.
+
+        According to sam2 PyPI package (12/11/2024 release):
+        - Supports torch.compile for major VOS speedup (vos_optimized=True)
+        - SAM2VideoPredictor for better multi-object tracking
+        - Independent per-object inference
+        - Can add new objects after tracking starts
+
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            import os
+            from pathlib import Path
+
+            # import sam2  # type: ignore
+            from sam2.build_sam import build_sam2_video_predictor  # type: ignore
+            from sam2.sam2_video_predictor import SAM2VideoPredictor  # type: ignore
+
+            # Check for SAM 2 checkpoint
+            sam2_checkpoint = os.getenv("SAM2_CHECKPOINT", None)
+            resources_dir = Path(__file__).parent.parent.parent / "resources"
+
+            if not sam2_checkpoint:
+                # Check resources directory
+                sam2_checkpoints = [
+                    resources_dir / "sam2.1_hiera_tiny.pt",
+                    resources_dir / "sam2.1_hiera_small.pt",
+                    resources_dir / "sam2.1_hiera_base_plus.pt",
+                    resources_dir / "sam2.1_hiera_large.pt",
+                ]
+
+                for checkpoint_path in sam2_checkpoints:
+                    if checkpoint_path.exists():
+                        sam2_checkpoint = str(checkpoint_path)
+                        logger.info(f"Found SAM 2 checkpoint: {checkpoint_path.name}")
+                        break
+
+            if not sam2_checkpoint or not os.path.exists(sam2_checkpoint):
+                logger.debug(
+                    "SAM 2 checkpoint not found for video predictor. "
+                    "Set SAM2_CHECKPOINT env var or place checkpoint in resources/"
+                )
+                return False
+
+            # Determine config from checkpoint name
+            checkpoint_name = os.path.basename(sam2_checkpoint).lower()
+            if "tiny" in checkpoint_name or "t" in checkpoint_name:
+                config_name = "sam2.1_hiera_t"
+            elif "small" in checkpoint_name or "s" in checkpoint_name:
+                config_name = "sam2.1_hiera_s"
+            elif "base_plus" in checkpoint_name or "b+" in checkpoint_name:
+                config_name = "sam2.1_hiera_b+"
+            elif "large" in checkpoint_name or "l" in checkpoint_name:
+                config_name = "sam2.1_hiera_l"
+            else:
+                config_name = "sam2.1_hiera_b+"  # Default
+                logger.warning(
+                    f"Could not determine config from {checkpoint_name}, using {config_name}"
+                )
+
+            # Build video predictor with VOS optimization
+            logger.info(
+                f"Building SAM 2 Video Predictor ({config_name}) with VOS optimization..."
+            )
+            sam2_video_model = build_sam2_video_predictor(
+                config_name,
+                sam2_checkpoint,
+                device=self.device,
+                vos_optimized=True,  # Enable torch.compile for speedup
+            )
+
+            self.sam2_video_predictor = SAM2VideoPredictor(sam2_video_model)
+            logger.info(
+                f"SAM 2 Video Predictor loaded successfully on {self.device} "
+                f"(VOS optimized: torch.compile enabled)"
+            )
+            return True
+
+        except ImportError:
+            logger.debug("SAM 2 video predictor not available")
+            return False
+        except Exception as e:
+            logger.warning(f"Error loading SAM 2 Video Predictor: {e}")
             return False
 
     def _load_clip(self) -> bool:
@@ -343,6 +495,89 @@ class FollowAnythingModel(DetectionModel, Tracker):
             return True
         return False
 
+    def _get_masks_huggingface_sam2(
+        self, image_rgb: np.ndarray
+    ) -> List[Dict[str, Any]]:
+        """
+        Get masks using HuggingFace SAM 2 mask-generation pipeline (OPTIMAL).
+
+        According to https://huggingface.co/docs/transformers/en/model_doc/sam2:
+        - 6x faster than original SAM
+        - Better accuracy and generalization
+        - Native batch support with points_per_batch parameter
+        - Automatic mask generation via pipeline
+
+        Returns:
+            List of mask dictionaries matching original FAn format.
+        """
+        if self.hf_sam2_generator is None:
+            return []
+
+        try:
+            # Convert numpy array to PIL Image (HuggingFace expects PIL)
+            from PIL import Image
+
+            pil_image = Image.fromarray(image_rgb)
+
+            # Generate masks using HuggingFace pipeline
+            # points_per_batch=64 for optimal batching (same as original SAM)
+            outputs = self.hf_sam2_generator(
+                pil_image,
+                points_per_batch=64,  # Batch 64 points at once for speed
+            )
+
+            # Convert to FAn format (list of dicts)
+            mask_dicts = []
+            h, w = image_rgb.shape[:2]
+            image_area = h * w
+
+            for ann in outputs["masks"]:
+                # HuggingFace returns masks as numpy arrays
+                mask = ann["segmentation"]  # Binary mask (numpy array)
+                mask_area = int(ann["area"])
+                coverage = mask_area / image_area if image_area > 0 else 0
+
+                # Skip full-frame masks (coverage > 90%)
+                if coverage >= 0.90:
+                    continue
+
+                # Skip very small masks
+                if mask_area < 200:  # min_area_size default
+                    continue
+
+                # Get bbox (HuggingFace provides it)
+                bbox = ann["bbox"]  # [x, y, w, h] format
+
+                # Get point coords (from automatic mask generator)
+                point_coords = ann.get("point_coords", [[w * 0.5, h * 0.5]])[0]
+
+                # Get score (predicted IOU)
+                score = float(ann.get("predicted_iou", 0.8))
+
+                # Create mask dict matching original FAn format
+                mask_dict = {
+                    "segmentation": mask,
+                    "bbox": bbox,
+                    "area": mask_area,
+                    "point_coords": point_coords,
+                    "score": score,
+                }
+
+                mask_dicts.append(mask_dict)
+
+            # Sort by score (predicted_iou) - original FAn sorts by cfg['sort_by']
+            mask_dicts.sort(key=lambda x: x["score"], reverse=True)
+
+            # Return top masks
+            return mask_dicts[:50]  # Top 50 masks
+
+        except Exception as e:
+            logger.warning(f"Error generating masks with HuggingFace SAM 2: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
+
     def _get_masks_sam2(self, image_rgb: np.ndarray) -> List[Dict[str, Any]]:
         """
         Get masks using SAM 2, matching original FAn format.
@@ -372,72 +607,103 @@ class FollowAnythingModel(DetectionModel, Tracker):
             # by generating masks from a grid of points (similar to how SAM's
             # automatic mask generator works internally)
 
-            # Generate masks from a grid of points across the image
-            # This simulates automatic mask generation
-            points_per_side = 16  # Original FAn default (from model_args.py)
-            step = min(w, h) // points_per_side
+            # CRITICAL PERFORMANCE FIX:
+            # Original FAn uses SamAutomaticMaskGenerator.generate() which is ONE optimized GPU call
+            # We're using SAM 2 which doesn't have automatic mask generation
+            # Instead of looping through many points (slow), use strategic sparse sampling
+            # Original FAn uses points_per_side=16, but that's for optimized automatic generator
+            # For manual point sampling, we need FAR fewer points for real-time performance
+
+            # Use sparse strategic points instead of dense grid
+            # This reduces from 64+ GPU calls to ~9-16 calls (much faster)
+            # Strategy: Sample points at key locations (center, corners, edges)
+            strategic_points = []
+            margin = 0.1  # 10% margin from edges
+
+            # Center point (most important)
+            strategic_points.append([w * 0.5, h * 0.5])
+
+            # Corner regions (4 points)
+            strategic_points.append([w * margin, h * margin])
+            strategic_points.append([w * (1 - margin), h * margin])
+            strategic_points.append([w * margin, h * (1 - margin)])
+            strategic_points.append([w * (1 - margin), h * (1 - margin)])
+
+            # Edge centers (4 points)
+            strategic_points.append([w * 0.5, h * margin])
+            strategic_points.append([w * 0.5, h * (1 - margin)])
+            strategic_points.append([w * margin, h * 0.5])
+            strategic_points.append([w * (1 - margin), h * 0.5])
+
+            # Additional strategic points for better coverage (optional, adds 4 more)
+            # Can disable these for even faster performance
+            strategic_points.append([w * 0.33, h * 0.33])
+            strategic_points.append([w * 0.67, h * 0.33])
+            strategic_points.append([w * 0.33, h * 0.67])
+            strategic_points.append([w * 0.67, h * 0.67])
 
             all_mask_dicts = []
             seen_masks = set()
 
-            # Sample points in a grid pattern
-            for y in range(step // 2, h, step):
-                for x in range(step // 2, w, step):
-                    points = np.array([[x, y]], dtype=np.float32)
-                    point_labels = np.array([1], dtype=np.int32)
+            # Sample from strategic points (much faster than grid)
+            for point in strategic_points:
+                x, y = int(point[0]), int(point[1])
+                points = np.array([[x, y]], dtype=np.float32)
+                point_labels = np.array([1], dtype=np.int32)
 
-                    # Generate multiple masks from this point
-                    masks, scores, _ = self.sam2_predictor.predict(
-                        point_coords=points,
-                        point_labels=point_labels,
-                        multimask_output=True,
-                    )
+                # Generate multiple masks from this point
+                # CRITICAL: Use GPU - ensure predictor uses device
+                masks, scores, _ = self.sam2_predictor.predict(
+                    point_coords=points,
+                    point_labels=point_labels,
+                    multimask_output=True,
+                )
 
-                    # Convert to FAn format (list of dicts)
-                    for mask, score in zip(masks, scores):
-                        mask_area = np.sum(mask)
-                        coverage = mask_area / image_area if image_area > 0 else 0
+                # Convert to FAn format (list of dicts)
+                for mask, score in zip(masks, scores):
+                    mask_area = np.sum(mask)
+                    coverage = mask_area / image_area if image_area > 0 else 0
 
-                        # Skip full-frame masks (coverage > 90%)
-                        if coverage >= 0.90:
-                            continue
+                    # Skip full-frame masks (coverage > 90%)
+                    if coverage >= 0.90:
+                        continue
 
-                        # Skip very small masks
-                        if mask_area < 200:  # min_area_size default
-                            continue
+                    # Skip very small masks
+                    if mask_area < 200:  # min_area_size default
+                        continue
 
-                        # Get bounding box
-                        y_indices, x_indices = np.where(mask)
-                        if len(x_indices) == 0 or len(y_indices) == 0:
-                            continue
+                    # Get bounding box
+                    y_indices, x_indices = np.where(mask)
+                    if len(x_indices) == 0 or len(y_indices) == 0:
+                        continue
 
-                        x_min, x_max = int(x_indices.min()), int(x_indices.max())
-                        y_min, y_max = int(y_indices.min()), int(y_indices.max())
-                        bbox = [
-                            x_min,
-                            y_min,
-                            x_max - x_min,
-                            y_max - y_min,
-                        ]  # [x, y, w, h]
+                    x_min, x_max = int(x_indices.min()), int(x_indices.max())
+                    y_min, y_max = int(y_indices.min()), int(y_indices.max())
+                    bbox = [
+                        x_min,
+                        y_min,
+                        x_max - x_min,
+                        y_max - y_min,
+                    ]  # [x, y, w, h]
 
-                        # Create mask dict matching original FAn format
-                        mask_dict = {
-                            "segmentation": mask,
-                            "bbox": bbox,
-                            "area": int(mask_area),
-                            "point_coords": [x, y],
-                            "score": float(score),
-                        }
+                    # Create mask dict matching original FAn format
+                    mask_dict = {
+                        "segmentation": mask,
+                        "bbox": bbox,
+                        "area": int(mask_area),
+                        "point_coords": [x, y],
+                        "score": float(score),
+                    }
 
-                        # Deduplicate using simple hash
-                        mask_hash = hash(mask.tobytes()[:1000])
-                        if mask_hash not in seen_masks:
-                            all_mask_dicts.append(mask_dict)
-                            seen_masks.add(mask_hash)
+                    # Deduplicate using simple hash
+                    mask_hash = hash(mask.tobytes()[:1000])
+                    if mask_hash not in seen_masks:
+                        all_mask_dicts.append(mask_dict)
+                        seen_masks.add(mask_hash)
 
-                            # Limit total masks to avoid memory issues
-                            if len(all_mask_dicts) >= 100:
-                                break
+                        # Limit total masks to avoid memory issues
+                        if len(all_mask_dicts) >= 100:
+                            break
 
                 if len(all_mask_dicts) >= 100:
                     break
@@ -495,9 +761,14 @@ class FollowAnythingModel(DetectionModel, Tracker):
             boxes = []
 
             # FAn detection pipeline:
-            # 1. Get masks from SAM 2 (returns list of dicts matching original FAn format)
+            # 1. Get masks (priority: HuggingFace SAM 2 > SAM 2 manual)
+            # Note: SAM 2 Video Predictor is for video tracking, not mask generation
             mask_dicts = []
-            if self.use_sam2 and self.sam2_predictor is not None:
+            if self.hf_sam2_generator is not None:
+                # Use HuggingFace SAM 2 (BEST - 6x faster, better accuracy, no checkpoint needed)
+                mask_dicts = self._get_masks_huggingface_sam2(image_rgb)
+            elif self.use_sam2 and self.sam2_predictor is not None:
+                # Fallback to SAM 2 manual (requires checkpoint)
                 mask_dicts = self._get_masks_sam2(image_rgb)
 
             if not mask_dicts:
@@ -640,12 +911,10 @@ class FollowAnythingModel(DetectionModel, Tracker):
                     # Check similarity threshold
                     # Original FAn uses class_threshold=0.4 (default) for DINO
                     # For CLIP, similarities are typically lower (0.15-0.30 range)
-                    # However, since we extract ROI from bbox (not full masked image),
-                    # similarities might be higher. Original FAn uses 0.4 for both.
-                    # But based on logs, CLIP similarities are 0.22-0.27, so we use 0.25
-                    # as a compromise - still higher than before (0.15) but realistic for CLIP
+                    # Based on logs, CLIP similarities are 0.22-0.25, so we use 0.20
+                    # to allow more detections while still filtering noise
                     # If using stored features (re-detection), use slightly lower threshold
-                    similarity_threshold = 0.22 if use_stored_features else 0.25
+                    similarity_threshold = 0.18 if use_stored_features else 0.20
 
                     # Log similarity for debugging (use INFO level so it shows up)
                     logger.info(
