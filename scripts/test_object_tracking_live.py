@@ -90,12 +90,12 @@ class ObjectTracker:
             if not self.model.is_available() and self.model.fallback is None:
                 logger.warning("FAn not available, falling back to FAn fallback")
                 self.method = "fan_fallback"
-                self._initialize_models()
+                # Initialize fallback method directly (avoid recursion)
+                self._initialize_fan_fallback()
                 return
 
         elif self.method == "fan_fallback":
-            # Follow Anything Fallback (Grounding DINO + Bot-SORT)
-            self.fallback = FollowAnythingFallback(device=self.device)
+            self._initialize_fan_fallback()
 
         elif self.method == "grounding_dino":
             # Grounding DINO + Bot-SORT directly
@@ -105,6 +105,11 @@ class ObjectTracker:
                 logger.warning("Bot-SORT not available, tracking may fail")
 
         logger.info(f"✓ {self.method} method initialized")
+
+    def _initialize_fan_fallback(self):
+        """Initialize FAn fallback method (Grounding DINO + Bot-SORT)."""
+        # Follow Anything Fallback (Grounding DINO + Bot-SORT)
+        self.fallback = FollowAnythingFallback(device=self.device)
 
     def detect_and_track(
         self, frame: np.ndarray, text_prompt: str, initial_detection: bool = True
