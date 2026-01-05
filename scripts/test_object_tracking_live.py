@@ -98,9 +98,19 @@ class ObjectTracker:
             self._initialize_fan_fallback()
 
         elif self.method == "grounding_dino":
-            # Grounding DINO + Bot-SORT directly
+            # Grounding DINO + Bot-SORT directly (simpler method, no FAn components)
             self.model = GroundingDINOModel(device=self.device)
-            self.tracker = BotSORTTracker(device=self.device)
+            from ahmedkobtan_cinema_robot_playground.src.models.tracking_models import (
+                SmartTracker,
+            )
+
+            base_tracker = BotSORTTracker(device=self.device)
+            self.tracker = SmartTracker(
+                base_tracker=base_tracker,
+                detection_callback=None,
+                min_hits_to_confirm=3,
+                redetect_interval=5,
+            )
             if not self.tracker.is_available():
                 logger.warning("Bot-SORT not available, tracking may fail")
 
@@ -442,26 +452,26 @@ def test_tracking(
             else:
                 # Continue tracking - SmartTracker handles re-detection logic internally
                 # We provide detections for establishment phase, then let tracker handle periodic re-detection
-                # For establishment: provide detections for first 5 frames
-                # After that: tracker will re-detect every 10 frames automatically
+                # For establishment: provide detections for first 3 frames (matches min_hits_to_confirm=3)
+                # After that: tracker will re-detect every 5 frames automatically
 
-                # Check if we're still in establishment phase (first 5 frames after initial detection)
+                # Check if we're still in establishment phase (first 3 frames after initial detection)
                 # We'll track this with a simple counter
                 if not hasattr(tracker, "_establishment_count"):
                     tracker._establishment_count = 0
 
-                if tracker._establishment_count < 5:
+                if tracker._establishment_count < 3:
                     # Establishment phase: provide detections
                     tracker._establishment_count += 1
                     logger.debug(
-                        f"Frame {frame_count}: Establishing track ({tracker._establishment_count}/5)..."
+                        f"Frame {frame_count}: Establishing track ({tracker._establishment_count}/3)..."
                     )
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=True
                     )
                 else:
                     # After establishment: let SmartTracker handle periodic re-detection
-                    # It will automatically re-detect every 10 frames
+                    # It will automatically re-detect every 5 frames
                     success, bbox, state = tracker.detect_and_track(
                         frame, text_prompt, initial_detection=False
                     )

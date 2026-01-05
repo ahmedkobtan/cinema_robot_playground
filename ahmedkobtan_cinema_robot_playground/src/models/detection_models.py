@@ -155,9 +155,11 @@ class GroundingDINOModel(DetectionModel):
                 outputs = self.model(**inputs)
 
             # Process results with adaptive threshold
-            # Use a general threshold that works for most objects
-            # Lower threshold for better recall (can filter by confidence later)
-            threshold = 0.18
+            # Lower threshold for better recall, especially for objects like "lamp"
+            # Can filter by confidence later if needed
+            threshold = (
+                0.15  # Lowered from 0.18 for better detection of difficult objects
+            )
 
             results = self.processor.post_process_grounded_object_detection(
                 outputs,

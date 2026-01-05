@@ -6,7 +6,7 @@ FAn approach (using modern PyPI packages):
 1. SAM 2 extracts multiple masks (segmentations)
 2. Based on DINO/CLIP features, FAn classifies each mask
 3. Objects are detected by assigning masks whose feature descriptor is closest to query
-4. Bot-SORT tracks the object across frames (or AOT if available)
+4. Bot-SORT tracks the object across frames
 
 Uses:
 - SAM 2 (sam2) - newer than SAM
@@ -476,8 +476,8 @@ class FollowAnythingModel(DetectionModel, Tracker):
             self.tracker = SmartTracker(
                 base_tracker=base_tracker,
                 detection_callback=None,  # Manual re-detection via update() with initial_bbox
-                min_hits_to_confirm=5,
-                redetect_interval=10,
+                min_hits_to_confirm=3,  # Reduced from 5 for faster track establishment
+                redetect_interval=5,  # Reduced from 10 for more frequent re-detection (better stability)
             )
             return True
         except Exception as e:
@@ -527,43 +527,74 @@ class FollowAnythingModel(DetectionModel, Tracker):
             )
 
             # Convert to FAn format (list of dicts)
+            # HuggingFace SAM 2 returns: {"masks": [tensor, ...], "scores": [float, ...]}
+            # Each mask is a 2D tensor of shape [H, W]
             mask_dicts = []
             h, w = image_rgb.shape[:2]
             image_area = h * w
 
-            for ann in outputs["masks"]:
-                # HuggingFace returns masks as numpy arrays
-                mask = ann["segmentation"]  # Binary mask (numpy array)
-                mask_area = int(ann["area"])
-                coverage = mask_area / image_area if image_area > 0 else 0
+            masks_list = outputs.get("masks", [])
+            scores_list = outputs.get("scores", [])
 
-                # Skip full-frame masks (coverage > 90%)
-                if coverage >= 0.90:
+            # Masks is a list of tensors, scores is a list of floats
+            for idx, mask_tensor in enumerate(masks_list):
+                try:
+                    # Convert tensor to numpy
+                    if hasattr(mask_tensor, "cpu"):
+                        mask = mask_tensor.cpu().numpy()
+                    elif hasattr(mask_tensor, "numpy"):
+                        mask = mask_tensor.numpy()
+                    else:
+                        mask = np.array(mask_tensor)
+
+                    # Ensure 2D mask
+                    if mask.ndim > 2:
+                        mask = mask.squeeze()
+                    if mask.ndim != 2:
+                        logger.debug(f"Skipping invalid mask shape: {mask.shape}")
+                        continue
+
+                    # Convert to boolean mask (threshold at 0.5)
+                    mask_bool = mask > 0.5
+                    mask_area = int(np.sum(mask_bool))
+                    coverage = mask_area / image_area if image_area > 0 else 0
+
+                    # Skip full-frame masks (coverage > 90%)
+                    if coverage >= 0.90:
+                        continue
+
+                    # Skip very small masks
+                    if mask_area < 200:
+                        continue
+
+                    # Calculate bbox from mask
+                    y_indices, x_indices = np.where(mask_bool)
+                    if len(x_indices) == 0:
+                        continue
+                    x_min, x_max = float(x_indices.min()), float(x_indices.max())
+                    y_min, y_max = float(y_indices.min()), float(y_indices.max())
+                    bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
+
+                    # Get score from scores list
+                    score = float(scores_list[idx]) if idx < len(scores_list) else 0.8
+
+                    # Use center of bbox as point coords
+                    point_coords = [
+                        x_min + (x_max - x_min) / 2,
+                        y_min + (y_max - y_min) / 2,
+                    ]
+
+                    mask_dict = {
+                        "segmentation": mask_bool,
+                        "bbox": bbox,
+                        "area": mask_area,
+                        "point_coords": point_coords,
+                        "score": score,
+                    }
+                    mask_dicts.append(mask_dict)
+                except Exception as e:
+                    logger.debug(f"Error processing mask {idx}: {e}")
                     continue
-
-                # Skip very small masks
-                if mask_area < 200:  # min_area_size default
-                    continue
-
-                # Get bbox (HuggingFace provides it)
-                bbox = ann["bbox"]  # [x, y, w, h] format
-
-                # Get point coords (from automatic mask generator)
-                point_coords = ann.get("point_coords", [[w * 0.5, h * 0.5]])[0]
-
-                # Get score (predicted IOU)
-                score = float(ann.get("predicted_iou", 0.8))
-
-                # Create mask dict matching original FAn format
-                mask_dict = {
-                    "segmentation": mask,
-                    "bbox": bbox,
-                    "area": mask_area,
-                    "point_coords": point_coords,
-                    "score": score,
-                }
-
-                mask_dicts.append(mask_dict)
 
             # Sort by score (predicted_iou) - original FAn sorts by cfg['sort_by']
             mask_dicts.sort(key=lambda x: x["score"], reverse=True)
@@ -1141,8 +1172,8 @@ class FollowAnythingFallback(DetectionModel, Tracker):
         self.tracker = SmartTracker(
             base_tracker=base_tracker,
             detection_callback=None,  # Manual re-detection via update() with initial_bbox
-            min_hits_to_confirm=5,
-            redetect_interval=10,
+            min_hits_to_confirm=3,  # Reduced from 5 for faster track establishment
+            redetect_interval=5,  # Reduced from 10 for more frequent re-detection (better stability)
         )
         self._tracking_initialized = False
 
