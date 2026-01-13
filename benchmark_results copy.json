@@ -1,0 +1,25 @@
+{
+  "follow_anything": {
+    "available": true,
+    "detection_fps": 7.35540022612446,
+    "detection_latency_ms": 135.95453262329102,
+    "tracking_fps": 216.50579603989326,
+    "tracking_latency_ms": 4.618813991546631,
+    "vram_allocated_gb": 1.3537354469299316,
+    "vram_reserved_gb": 2.017578125
+  },
+  "grounding_dino": {
+    "available": true,
+    "fps": 3.2436549400644394,
+    "latency_ms": 308.294198513031,
+    "vram_allocated_gb": 0.8809571266174316,
+    "vram_reserved_gb": 2.416015625
+  },
+  "botsort": {
+    "available": true,
+    "fps": 345.51249364670485,
+    "latency_ms": 2.8942513465881348,
+    "vram_allocated_gb": 0.008894920349121094,
+    "vram_reserved_gb": 0.025390625
+  }
+}
