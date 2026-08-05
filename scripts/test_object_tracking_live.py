@@ -479,6 +479,9 @@ def test_tracking(
                 if success and bbox:
                     display_frame = draw_tracking_box(display_frame, bbox, text_prompt)
                     successful_tracks += 1
+                    # Reset failure counter on success
+                    if hasattr(tracker, "_consecutive_failures"):
+                        tracker._consecutive_failures = 0
 
                     # Show tracking info
                     if state:
@@ -492,12 +495,26 @@ def test_tracking(
                             2,
                         )
                 else:
-                    # Tracking failed - reset and re-detect
+                    # Tracking failed - but don't reset immediately
+                    # Bot-SORT can recover, so only reset after multiple consecutive failures
                     failed_tracks += 1
-                    logger.warning(f"Frame {frame_count}: Tracking lost, resetting...")
-                    tracking_active = False
-                    if hasattr(tracker, "_establishment_count"):
-                        tracker._establishment_count = 0
+                    if not hasattr(tracker, "_consecutive_failures"):
+                        tracker._consecutive_failures = 0
+                    tracker._consecutive_failures += 1
+
+                    # Only reset if we've failed for 3+ consecutive frames
+                    if tracker._consecutive_failures >= 3:
+                        logger.warning(
+                            f"Frame {frame_count}: Tracking lost after {tracker._consecutive_failures} failures, resetting..."
+                        )
+                        tracking_active = False
+                        if hasattr(tracker, "_establishment_count"):
+                            tracker._establishment_count = 0
+                        tracker._consecutive_failures = 0
+                    else:
+                        logger.debug(
+                            f"Frame {frame_count}: Tracking temporarily lost ({tracker._consecutive_failures}/3), continuing..."
+                        )
                     cv2.putText(
                         display_frame,
                         "Tracking lost - Re-detecting...",

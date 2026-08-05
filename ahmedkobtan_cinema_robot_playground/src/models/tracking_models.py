@@ -129,10 +129,14 @@ class BotSORTTracker(Tracker):
             # CMC is useful when camera is moving (pan/tilt/wheels), so we keep it enabled
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*ECC did not converge.*")
+                # Bot-SORT configuration for better stability
+                # track_buffer controls how long tracks persist without detections (default 30)
+                # Increasing it helps maintain tracks longer, but we'll rely on re-detection instead
                 self.tracker = BotSort(
                     reid_weights=reid_weights_path,
                     device=device_str,  # Pass as string, not torch.device object
                     half=False,  # Use full precision (half=True for FP16 on GPU)
+                    track_buffer=50,  # Increased from default 30 for longer track persistence
                     # cmc_method="ecc" is default - keep enabled for moving camera scenarios
                 )
             self._initialized = True
@@ -357,6 +361,7 @@ class SmartTracker(Tracker):
         self._consecutive_detections = 0
         self._track_confirmed = False
         self._last_bbox = None
+        self._last_detection_frame = 0  # Track when we last had a detection
 
     def update(
         self,
@@ -378,9 +383,15 @@ class SmartTracker(Tracker):
         if initial_bbox is not None:
             self._consecutive_detections += 1
             self._last_bbox = initial_bbox
-            if self._consecutive_detections >= self.min_hits_to_confirm:
+            self._last_detection_frame = self._frame_count
+            state = self.base_tracker.update(frame, initial_bbox)
+            # Only confirm track if we get a valid state back AND have enough detections
+            if (
+                state is not None
+                and self._consecutive_detections >= self.min_hits_to_confirm
+            ):
                 self._track_confirmed = True
-            return self.base_tracker.update(frame, initial_bbox)
+            return state
 
         # Track not confirmed yet - need more detections
         if not self._track_confirmed:
@@ -390,9 +401,15 @@ class SmartTracker(Tracker):
                 if detected_bbox is not None:
                     self._consecutive_detections += 1
                     self._last_bbox = detected_bbox
-                    if self._consecutive_detections >= self.min_hits_to_confirm:
+                    self._last_detection_frame = self._frame_count
+                    state = self.base_tracker.update(frame, detected_bbox)
+                    # Only confirm track if we get a valid state back AND have enough detections
+                    if (
+                        state is not None
+                        and self._consecutive_detections >= self.min_hits_to_confirm
+                    ):
                         self._track_confirmed = True
-                    return self.base_tracker.update(frame, detected_bbox)
+                    return state
 
             # No detection available - try prediction
             state = self.base_tracker.update(frame, None)
@@ -421,8 +438,18 @@ class SmartTracker(Tracker):
                     # No callback - use prediction
                     return self.base_tracker.update(frame, None)
             else:
-                # Between re-detections - use prediction
-                return self.base_tracker.update(frame, None)
+                # Between re-detections - use prediction (Bot-SORT maintains track)
+                state = self.base_tracker.update(frame, None)
+                # Only reset if prediction fails AND we've gone too long without detection
+                # Bot-SORT max_age is typically 30 frames, so allow some tolerance
+                if (
+                    state is None
+                    and self._frame_count - self._last_detection_frame > 30
+                ):
+                    logger.debug("Track lost after extended period, resetting")
+                    self._consecutive_detections = 0
+                    self._track_confirmed = False
+                return state
 
         # Fallback
         return self.base_tracker.update(frame, None)
@@ -434,6 +461,7 @@ class SmartTracker(Tracker):
         self._consecutive_detections = 0
         self._track_confirmed = False
         self._last_bbox = None
+        self._last_detection_frame = 0
 
     def is_available(self) -> bool:
         """Check if tracker is available."""

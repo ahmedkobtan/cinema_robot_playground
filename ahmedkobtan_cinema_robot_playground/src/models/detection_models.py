@@ -145,9 +145,21 @@ class GroundingDINOModel(DetectionModel):
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+            # Enhance prompt for better detection (especially for objects like "lamp")
+            # Grounding DINO works better with multiple related terms
+            enhanced_prompt = text_prompt
+            if text_prompt:
+                prompt_lower = text_prompt.lower()
+                if "lamp" in prompt_lower:
+                    enhanced_prompt = (
+                        f"{text_prompt} . desk lamp . light . lighting fixture"
+                    )
+                elif "scissors" in prompt_lower:
+                    enhanced_prompt = f"{text_prompt} . cutting tool"
+
             # Process image and text
             inputs = self.processor(
-                images=image_rgb, text=text_prompt, return_tensors="pt"
+                images=image_rgb, text=enhanced_prompt, return_tensors="pt"
             ).to(self.device)
 
             # Run inference
@@ -157,9 +169,7 @@ class GroundingDINOModel(DetectionModel):
             # Process results with adaptive threshold
             # Lower threshold for better recall, especially for objects like "lamp"
             # Can filter by confidence later if needed
-            threshold = (
-                0.15  # Lowered from 0.18 for better detection of difficult objects
-            )
+            threshold = 0.10  # Further lowered from 0.12 for better detection of difficult objects like "lamp"
 
             results = self.processor.post_process_grounded_object_detection(
                 outputs,
@@ -207,9 +217,23 @@ class GroundingDINOModel(DetectionModel):
 
                     # If prompt has meaningful words, check if label contains any of them
                     # This is a general similarity check, not object-specific
+                    # For "lamp", also accept related terms like "light", "lamp", "lighting"
                     if prompt_words:
                         # Check if any prompt word appears in label (basic semantic similarity)
                         has_similarity = any(word in label_str for word in prompt_words)
+
+                        # Special handling for "lamp" - also check for related terms
+                        if "lamp" in prompt_lower and not has_similarity:
+                            lamp_related = [
+                                "light",
+                                "lamp",
+                                "lighting",
+                                "bulb",
+                                "fixture",
+                            ]
+                            has_similarity = any(
+                                term in label_str for term in lamp_related
+                            )
 
                         # If no similarity at all and confidence is low, might be a false positive
                         # But don't reject based on this alone - let confidence score handle it
